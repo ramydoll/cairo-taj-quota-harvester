@@ -1,4 +1,4 @@
-﻿name: Cloud Quota Harvester - Line 104
+name: Cloud Quota Harvester - Dokki Test
 
 on:
   schedule:
@@ -28,15 +28,15 @@ jobs:
         run: |
           cd github-harvester
           npm install --prefer-offline --no-audit
-      - name: Run harvester
+      - name: Run Dokki harvester test
         env:
           FIREBASE_API_KEY:    ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          WE_USERNAME:         ${{ secrets.WE_USERNAME }}
-          WE_PASSWORD:         ${{ secrets.WE_PASSWORD }}
+          DOKKI_USERNAME:      ${{ secrets.DOKKI_USERNAME }}
+          DOKKI_PASSWORD:      ${{ secrets.DOKKI_PASSWORD }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_ID:   ${{ secrets.TELEGRAM_GROUP_ID }}
         run: |
           cd github-harvester
-          node harvester-test.js
+          node harvester-dokki-test.js
