@@ -5,8 +5,6 @@ on:
     - cron: '0 */2 * * *'
   workflow_dispatch:
 
-# Refresh: 2026-08-28
-
 jobs:
   harvest:
     runs-on: ubuntu-latest
@@ -30,12 +28,7 @@ jobs:
         run: |
           cd github-harvester
           npm install --prefer-offline --no-audit
-<<<<<<< HEAD
       - name: Run harvester
-=======
-      
-      - name: Run harvester test
->>>>>>> 45ebde588b41406dfc569ba793f8f68e199de6fc
         env:
           FIREBASE_API_KEY:    ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
@@ -46,9 +39,4 @@ jobs:
           TELEGRAM_GROUP_ID:   ${{ secrets.TELEGRAM_GROUP_ID }}
         run: |
           cd github-harvester
-<<<<<<< HEAD
           node harvester-test.js
-=======
-          node harvester.js
-          
->>>>>>> 45ebde588b41406dfc569ba793f8f68e199de6fc
