@@ -421,11 +421,30 @@ async function harvestQuota() {
       },
       // M5: domcontentloaded + very long sleep
       async () => {
-        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 40000 });
-        await sleep(20000);
-        console.log('    domcontentloaded + 20s sleep');
+        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 50000 });
+        console.log('    [CLOUD] Waiting 35s for React mount...');
+        await sleep(35000);
+        const count = await page.evaluate(() => document.querySelectorAll('input').length);
+        console.log('    [CLOUD] Found ' + count + ' inputs after 35s');
+        if (count < 1) {
+          console.log('    [CLOUD] React STILL loading - waiting 20s more...');
+          await sleep(20000);
+          const count2 = await page.evaluate(() => document.querySelectorAll('input').length);
+          if (count2 < 1) throw new Error('No inputs after 55s - page not rendering');
+          console.log('    [CLOUD] Got ' + count2 + ' inputs after 55s total');
+        }
+      },
+      async () => {
+        console.log('    [EMERGENCY] Reloading page to force React mount...');
+        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'load', timeout: 50000 });
+        await sleep(8000);
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
+        console.log('    [EMERGENCY] Waiting 45s post-reload...');
+        await sleep(45000);
+        const count = await page.evaluate(() => document.querySelectorAll('input').length);
+        if (count < 1) throw new Error('Emergency reload failed');
       }
-    ], 'NAVIGATE', 55000);
+    ], 'NAVIGATE', 80000);
 
     console.log('  URL:', page.url());
 
@@ -1236,10 +1255,7 @@ async function harvestQuota() {
 
           if (candidates.size === 0) { console.log('    ! No valid OCR candidates'); continue; }
 
-          const bestAnswer = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0][0];
-          console.log('    Candidates:', JSON.stringify([...candidates.entries()]), '-> best:', bestAnswer);
 
-          if (candidates.size === 0) { console.log('    ! No valid OCR candidates'); continue; }
           // Consensus voting
           const sorted = [...candidates.entries()].sort((a, b) => b[1] - a[1]);
           sorted.forEach(([k, v]) => console.log('      "' + k.toLowerCase() + '" x' + v));
