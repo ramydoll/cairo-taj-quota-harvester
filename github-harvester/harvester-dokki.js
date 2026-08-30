@@ -66,11 +66,11 @@ async function launchBrowser(useTor) {
     args.push('--proxy-server=socks5://127.0.0.1:9050');
     console.log('  [TOR] Browser launching through Tor SOCKS5 proxy');
   }
-  // Try chromium path first (GitHub Actions), then chrome stable
+  // Use OLD stable Chrome (not the new setup-chrome)
   const chromePaths = [
+    '/usr/bin/google-chrome-stable',
     process.env.CHROME_PATH,
     '/opt/hostedtoolcache/setup-chrome/chromium/stable/x64/chrome',
-    '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium-browser',
     '/usr/bin/chromium'
   ].filter(Boolean);
