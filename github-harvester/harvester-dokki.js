@@ -1506,6 +1506,15 @@ async function harvestQuota() {
         await dropdowns[0].click();
         await sleep(1500);
 
+        // DIAGNOSTIC: Log all available dropdown options
+        const availableLines = await page.evaluate(() => {
+          const opts = Array.from(document.querySelectorAll(
+            '.ant-select-item-option-content, .ant-select-item, li, option'
+          ));
+          return opts.map(o => o.textContent?.trim()).filter(t => t && t.includes('023760009'));
+        });
+        console.log('    [DEBUG] Available lines in dropdown:', availableLines);
+
         // Click 0237600094
         const clicked = await page.evaluate(() => {
           const opts = Array.from(document.querySelectorAll(
@@ -1515,7 +1524,7 @@ async function harvestQuota() {
           if (t) { t.click(); return t.textContent.trim(); }
           return null;
         });
-        if (!clicked) throw new Error('Option 0237600094 not found');
+        if (!clicked) throw new Error('Option 0237600094 not found in dropdown. Available: ' + availableLines.join(', '));
         console.log('    Clicked:', clicked);
 
         // Poll aggressively â€” capture data THE MOMENT the page shows 0237600094 AND full data loaded
