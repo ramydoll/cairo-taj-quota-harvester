@@ -1117,12 +1117,41 @@ if (postLoginState === 'blocked' || postLoginState === 'unknown') {
     }
 
 
-        // Dismiss any ads before this step
+    
+    // ── dismissAds: Close any WE promotional popups/ads ──────────────────
+    async function dismissAds() {
+      try {
+        const dismissed = await page.evaluate(() => {
+          let count = 0;
+          const selectors = [
+            'button[class*="close"]', 'button[aria-label*="close" i]',
+            'button[aria-label*="dismiss" i]', '[class*="modal"] button[class*="close"]',
+            '[class*="popup"] button[class*="close"]', '.ant-modal-close', '.ant-modal-close-x',
+            '[style*="position: fixed"] button', '[style*="position:fixed"] button'
+          ];
+          for (const sel of selectors) {
+            const els = Array.from(document.querySelectorAll(sel));
+            for (const el of els) {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                const text = el.textContent ? el.textContent.trim() : '';
+                const isMainAction = /^(login|submit|confirm|ok)$/i.test(text);
+                if (!isMainAction) { el.click(); count++; }
+              }
+            }
+          }
+          const backdrop = document.querySelector('.ant-modal-mask, [class*="backdrop"]');
+          if (backdrop && count === 0) { backdrop.click(); count++; }
+          return count;
+        });
+        if (dismissed > 0) { console.log('  [AD] Dismissed', dismissed, 'popup(s)'); await sleep(1000); }
+      } catch(e) { /* non-critical */ }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+    // Dismiss any ads before this step
     await dismissAds();
 
-    console.log('STEP 2: SERVICE NUMBER (USERNAME)');
-    // ══════════════════════════════════════
-    console.log('  ✓ Login successful!\n');
+    console.log('  Login successful!\n');
 
     // Save session cookies for next run (avoids login entirely if session still valid)
     try {
