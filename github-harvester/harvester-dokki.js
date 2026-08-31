@@ -1236,6 +1236,10 @@ async function harvestQuota() {
 
           if (candidates.size === 0) { console.log('    ! No valid OCR candidates'); continue; }
 
+          const bestAnswer = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0][0];
+          console.log('    Candidates:', JSON.stringify([...candidates.entries()]), '-> best:', bestAnswer);
+
+          if (candidates.size === 0) { console.log('    ! No valid OCR candidates'); continue; }
           // Consensus voting
           const sorted = [...candidates.entries()].sort((a, b) => b[1] - a[1]);
           sorted.forEach(([k, v]) => console.log('      "' + k.toLowerCase() + '" x' + v));
