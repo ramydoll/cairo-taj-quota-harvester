@@ -1071,6 +1071,21 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     console.log('  Switching to line 0237600094...');
 
+    // FORCE NAVIGATION: WE sometimes redirects to wrong page after login.
+    // Explicitly navigate to accountoverview BEFORE attempting line switch.
+    const currentUrl = page.url();
+    if (!currentUrl.includes('accountoverview')) {
+      console.log('  [NAVIGATE] Current URL:', currentUrl);
+      console.log('  [NAVIGATE] Forcing navigation to accountoverview...');
+      await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+      await sleep(3000);
+      const newUrl = page.url();
+      console.log('  [NAVIGATE] New URL:', newUrl);
+      if (newUrl.includes('login')) {
+        throw new Error('WE forced redirect to login after navigation — possible session block');
+      }
+    }
+
     // CRITICAL: The WE portal does a session refresh after line switch that can
     // redirect back to #/login within seconds. The only reliable approach is to
     // extract the data THE MOMENT we confirm the correct page is showing —
