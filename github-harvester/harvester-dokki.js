@@ -624,6 +624,7 @@ async function harvestQuota() {
     ], 'SUBMIT', 20000);
 
     // ======================================
+    // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs T&C vs block
     // ======================================
     console.log('  Waiting for login result...');
@@ -637,32 +638,25 @@ async function harvestQuota() {
       }
       const pageState = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        // Captcha: modal present OR verification text
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
-        // T&C modal: WE shows terms after first login
-        const hasTnC = text.includes('terms') || text.includes('conditions') ||
+        // T&C modal: WE shows terms after first login from new IP
+        const hasTnC = !!modal && (text.includes('terms') || text.includes('conditions') ||
                        text.includes('الشروط') || text.includes('موافق') ||
-                       text.includes('accept') || text.includes('agree');
+                       text.includes('accept') || text.includes('agree'));
         const hasCaptcha = (!!modal && !hasTnC) || text.includes('verification') || text.includes('enter code');
-        // Block messages
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') ||
                           text.includes('blocked') || text.includes('محاولات') ||
                           text.includes('الحد الاقصى') || text.includes('مره اخرى');
-        // Silent fail: still on login page with no change after submit
-        // Detect WE's ant-form-item-explain-error (red validation text under fields)
+        // Real form validation errors (red text under fields - NOT dropdown options)
         const formErrors = Array.from(document.querySelectorAll(
           '.ant-form-item-explain-error, .ant-form-item-has-error .ant-form-item-explain'
         ));
-        const formErrorTexts = formErrors.map(e => e.innerText?.trim()).filter(t => t && t.length > 0);
+        const formErrorTexts = formErrors.map(function(e) { return e.innerText && e.innerText.trim(); }).filter(function(t) { return t && t.length > 0; });
         const hasFormError = formErrorTexts.length > 0;
-        // Check button state
         const submitBtn = document.querySelector('button[type="submit"], button.ant-btn-primary');
         const btnLoading = submitBtn ? (submitBtn.className.includes('loading') || submitBtn.disabled) : false;
-        return {
-          hasCaptcha, hasTnC, isBlocked, hasFormError, formErrorTexts,
-          btnLoading, text: text.slice(0, 300)
-        };
+        return { hasCaptcha: hasCaptcha, hasTnC: hasTnC, isBlocked: isBlocked, hasFormError: hasFormError, formErrorTexts: formErrorTexts, btnLoading: btnLoading, text: text.slice(0, 300) };
       });
 
       if (pageState.isBlocked) {
@@ -688,19 +682,18 @@ async function harvestQuota() {
       }
       if (tick === 3 || tick === 8 || tick === 15) {
         console.log('  [DEBUG] Tick', tick + 1, 's - still on login, btn loading:', pageState.btnLoading);
-        console.log('  [DEBUG] Page text sample:', pageState.text.slice(0, 200));
+        console.log('  [DEBUG] Page text:', pageState.text.slice(0, 200));
       }
       if (tick % 3 === 0) console.log('  Waiting...', tick + 1, 's');
       await sleep(1000);
     }
 
-    // Handle T&C modal - accept it and continue
+    // Handle T&C - accept and continue
     if (postLoginState === 'tnc') {
       console.log('  [T&C] Accepting Terms and Conditions...');
-      await page.evaluate(() => {
+      await page.evaluate(function() {
         const btns = Array.from(document.querySelectorAll('button'));
-        // Look for accept/agree/ok/confirm button
-        const btn = btns.find(b => /accept|agree|ok|confirm|موافق/i.test(b.textContent)) ||
+        const btn = btns.find(function(b) { return /accept|agree|ok|confirm|موافق/i.test(b.textContent); }) ||
                     document.querySelector('button.ant-btn-primary');
         if (btn) { console.log('[T&C] Clicking:', btn.textContent.trim()); btn.click(); }
       });
@@ -708,23 +701,20 @@ async function harvestQuota() {
       const urlAfterTnC = page.url();
       if (!urlAfterTnC.includes('login')) {
         postLoginState = 'navigated';
-        console.log('  [T&C] Accepted! Navigated to:', urlAfterTnC);
+        console.log('  [T&C] Accepted! Now at:', urlAfterTnC);
       } else {
-        // T&C accepted but still on login - might need captcha next
-        console.log('  [T&C] Accepted but still on login, rechecking...');
-        const modal2 = await page.evaluate(() => !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]'));
-        if (modal2) { postLoginState = 'captcha'; console.log('  [T&C] Captcha appeared after T&C'); }
+        const modal2 = await page.evaluate(function() { return !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]'); });
+        if (modal2) { postLoginState = 'captcha'; console.log('  [T&C] Captcha appeared after T&C accept'); }
         else { postLoginState = 'unknown'; }
       }
     }
 
-    // Handle form validation error - credentials issue
+    // Handle form validation error
     if (postLoginState === 'formerror') {
-      console.log('  [FORM-ERROR] Form validation failed - credentials or format issue');
-      throw new Error('Form validation error - check credentials format');
+      throw new Error('Login form validation failed - check credentials or field format');
     }
 
-    if (postLoginState === 'blocked' || postLoginState === 'unknown') {
+if (postLoginState === 'blocked' || postLoginState === 'unknown') {
       await clearCookies();
       if (_torRetryCount < 2) {
         _torRetryCount++;
