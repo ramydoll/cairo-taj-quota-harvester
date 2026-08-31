@@ -503,29 +503,33 @@ async function harvestQuota() {
     // ======================================
     await tryMethods([
       async () => {
+        // Method 1: Focus password field and press Enter (most reliable for forms)
+        await page.focus('#login_password_input_01').catch(() => {});
+        await sleep(500);
+        await page.keyboard.press('Enter');
+        await sleep(6000);
+        console.log('    password field + Enter');
+      },
+      async () => {
         await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button'));
           const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
           if (btn) btn.click();
         });
         await sleep(6000);
-        console.log('    local harvester method');
+        console.log('    login button click');
+      },
+      async () => {
+        // Try clicking the button element directly with page.click
+        const loginBtn = await page.$('button.ant-btn-primary, button[type="submit"]');
+        if (loginBtn) await loginBtn.click();
+        await sleep(6000);
+        console.log('    direct button element click');
       },
       async () => {
         await page.keyboard.press('Enter');
         await sleep(10000);
-        console.log('    press Enter');
-      },
-      async () => {
-        const btns = await page.$$('button');
-        if (btns.length) await btns[0].click();
-        await sleep(10000);
-        console.log('    first button');
-      },
-      async () => {
-        await page.click('button[type="submit"]').catch(() => {});
-        await sleep(10000);
-        console.log('    submit button');
+        console.log('    global Enter press');
       },
       async () => {
         await page.evaluate(() => { document.querySelector('form')?.submit(); });
@@ -538,6 +542,22 @@ async function harvestQuota() {
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
     // ======================================
     console.log('  Waiting for login result...');
+    
+    // IMMEDIATE CHECK: See if form validation error appeared
+    await sleep(2000);
+    const formError = await page.evaluate(() => {
+      const errorEls = Array.from(document.querySelectorAll('.ant-form-item-explain-error, .ant-message-error, [class*="error"]'));
+      for (const el of errorEls) {
+        const txt = el.innerText?.trim();
+        if (txt && txt.length > 0 && txt.length < 200) return txt;
+      }
+      return null;
+    });
+    if (formError) {
+      console.log('  [FORM ERROR] Validation failed:', formError);
+      throw new Error('Form validation error: ' + formError);
+    }
+
     let postLoginState = 'unknown';
     for (let tick = 0; tick < 20; tick++) {
       const currentUrl = page.url();
