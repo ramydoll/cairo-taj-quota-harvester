@@ -771,8 +771,9 @@ async function harvestQuota() {
             const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
             if (btn) btn.click();
           });
-          // Wait for modal or navigation
-          for (let w = 0; w < 12; w++) {
+          // Wait 5s for submit to process, then check for modal (up to 25s total)
+          await sleep(5000);
+          for (let w = 0; w < 25; w++) {
             await sleep(1000);
             if (!page.url().includes('login')) return 'navigated';
             const hasModal = await page.evaluate(() => !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]'));
@@ -846,9 +847,9 @@ async function harvestQuota() {
         }
 
         try {
-          // -- Wait for valid captcha image (up to 15s) -------------------------
+          // -- Wait for valid captcha image (up to 30s) -------------------------
           let imgHandle = null;
-          for (let retry = 0; retry < 15; retry++) {
+          for (let retry = 0; retry < 30; retry++) {
             imgHandle = await findCaptchaImg();
             const isValid = await page.evaluate(function(el) {
               if (!el) return false;
@@ -860,7 +861,7 @@ async function harvestQuota() {
             imgHandle = null;
             await sleep(1000);
           }
-          if (!imgHandle) { console.log('    ! No valid captcha image after 15s'); continue; }
+          if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); continue; }
 
           // -- Run ALL 18 filters + build weighted vote pool --------------------
           // colorOnly = 3 votes, all others = 1 vote
