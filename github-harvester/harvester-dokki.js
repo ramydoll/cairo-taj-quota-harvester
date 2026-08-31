@@ -586,11 +586,17 @@ async function harvestQuota() {
     // ======================================
     await tryMethods([
       async () => {
-        await page.evaluate(() => {
+        const clicked = await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button'));
           const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) btn.click();
+          if (btn) {
+            console.log('[SUBMIT] Found button:', btn.textContent.trim(), 'disabled:', btn.disabled);
+            btn.click();
+            return { found: true, text: btn.textContent.trim(), disabled: btn.disabled };
+          }
+          return { found: false };
         });
+        console.log('    [SUBMIT] Button click result:', JSON.stringify(clicked));
         await sleep(6000);
         console.log('    local harvester method');
       },
@@ -639,7 +645,29 @@ async function harvestQuota() {
                           text.includes('exceeded') || text.includes('try again') ||
                           text.includes('blocked') || text.includes('محاولات') ||
                           text.includes('الحد الاقصى') || text.includes('مره اخرى');
-        return { hasCaptcha, isBlocked, text: text.slice(0, 200) };
+        
+        // DIAGNOSTIC: Check for error messages on login page (red text, alerts, etc)
+        const alerts = Array.from(document.querySelectorAll('.ant-alert, .ant-message, [class*="error"], [class*="alert"]'));
+        const errorTexts = alerts.map(a => a.innerText?.trim()).filter(t => t && t.length < 200);
+        const hasVisibleError = alerts.some(a => {
+          const style = window.getComputedStyle(a);
+          return style.display !== 'none' && style.visibility !== 'hidden';
+        });
+        
+        // Check if submit button is disabled or loading
+        const submitBtn = document.querySelector('button[type="submit"], button.ant-btn-primary');
+        const btnDisabled = submitBtn ? submitBtn.disabled : false;
+        const btnLoading = submitBtn ? submitBtn.className.includes('loading') : false;
+        
+        return { 
+          hasCaptcha, 
+          isBlocked, 
+          text: text.slice(0, 200),
+          errorTexts,
+          hasVisibleError,
+          btnDisabled,
+          btnLoading
+        };
       });
 
       if (pageState.isBlocked) {
@@ -653,6 +681,18 @@ async function harvestQuota() {
         console.log('  [CAPTCHA] Modal detected at', tick + 1, 'seconds');
         break;
       }
+      
+      // DIAGNOSTIC: Show what's happening on the page
+      if (tick === 3 || tick === 8 || tick === 15) {
+        console.log('  [DEBUG] Tick', tick + 1, 's - URL still on login page');
+        if (pageState.hasVisibleError) {
+          console.log('  [DEBUG] Visible errors:', JSON.stringify(pageState.errorTexts));
+        }
+        if (pageState.btnDisabled) console.log('  [DEBUG] Submit button is DISABLED');
+        if (pageState.btnLoading) console.log('  [DEBUG] Submit button is LOADING');
+        console.log('  [DEBUG] Page text sample:', pageState.text.slice(0, 150));
+      }
+      
       if (tick % 3 === 0) console.log('  Waiting...', tick + 1, 's');
       await sleep(1000);
     }
