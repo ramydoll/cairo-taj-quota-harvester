@@ -99,9 +99,9 @@ async function harvestQuota() {
       const cookieStr = doc?.fields?.cookies?.stringValue;
       const savedAt = doc?.fields?.savedAt?.stringValue;
       if (!cookieStr || !savedAt) return null;
-      // Only use cookies saved within last 4 hours
+      // Only use cookies saved within last 8 hours (WE sessions last long)
       const age = Date.now() - new Date(savedAt).getTime();
-      if (age > 4 * 60 * 60 * 1000) { console.log('  [SESSION] Cookies expired (>4h old), will do fresh login'); return null; }
+      if (age > 8 * 60 * 60 * 1000) { console.log('  [SESSION] Cookies expired (>8h old), will do fresh login'); return null; }
       console.log('  [SESSION] Found saved cookies (' + Math.floor(age/60000) + 'm old)');
       return JSON.parse(cookieStr);
     } catch(e) { console.log('  [SESSION] Could not load cookies:', e.message); return null; }
@@ -116,7 +116,7 @@ async function harvestQuota() {
         body: JSON.stringify({ fields: {
           cookies:  { stringValue: JSON.stringify(cookies) },
           savedAt:  { stringValue: new Date().toISOString() },
-          line:     { stringValue: '104' }
+          line:     { stringValue: 'dokki' }
         }})
       });
       console.log('  [SESSION] Cookies saved to Firestore ✓');
@@ -189,20 +189,47 @@ async function harvestQuota() {
       try {
         console.log('  Trying saved session cookies...');
         await page.setCookie(...savedCookies);
-        await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
-        await sleep(3000);
-        const url = page.url();
-        const isLoggedIn = !url.includes('login') && url.includes('account');
+        
+        // ROBUST SESSION CHECK - try multiple approaches before giving up
+        // Approach 1: Go to login page first, then check if we get auto-redirected
+        await page.goto('https://my.te.eg/echannel/#/login', { waitUntil: 'networkidle2', timeout: 25000 });
+        await sleep(5000); // Cloud is slow - give it time to auto-redirect if session valid
+        
+        let url = page.url();
+        console.log('  After login page visit, URL:', url);
+        
+        // If still on login page, try direct navigation to account
+        if (url.includes('login')) {
+          console.log('  Still on login, trying direct navigation to account...');
+          await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'domcontentloaded', timeout: 25000 });
+          await sleep(6000); // Extra wait for cloud environment
+          url = page.url();
+          console.log('  After account page visit, URL:', url);
+        }
+        
+        // Final check - are we on account page AND can we see data?
+        const isLoggedIn = await page.evaluate(() => {
+          const url = window.location.href;
+          const onAccountPage = !url.includes('login') && url.includes('account');
+          const hasData = document.body.innerText.includes('Remaining') || 
+                         document.body.innerText.includes('Balance') ||
+                         document.body.innerText.includes('currently managing');
+          return onAccountPage && hasData;
+        });
+        
         if (isLoggedIn) {
           sessionValid = true;
           console.log('  ✓ Session still valid! Skipping login entirely.\n');
         } else {
-          console.log('  ✗ Session expired, clearing and doing fresh login');
-          await clearCookies();
+          console.log('  ✗ Session expired or invalid, will do fresh login');
+          console.log('  [INFO] Not clearing cookies - might work next time');
+          // DON'T clear cookies immediately - they might work next time
+          // Only clear after multiple failures or if we get blocked
         }
       } catch(e) {
         console.log('  ✗ Session check failed:', e.message);
-        await clearCookies();
+        console.log('  [INFO] Will attempt fresh login');
+        // DON'T clear cookies - might just be network issue
       }
     } else {
       console.log('  No saved session, will do fresh login\n');
