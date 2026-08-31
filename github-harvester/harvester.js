@@ -548,12 +548,19 @@ async function harvestQuota() {
     console.log('  Waiting for login result...');
     
     // IMMEDIATE CHECK: See if form validation error appeared
+    // Skip generic UI text like "Internet", "Select Type", etc.
     await sleep(2000);
     const formError = await page.evaluate(() => {
-      const errorEls = Array.from(document.querySelectorAll('.ant-form-item-explain-error, .ant-message-error, [class*="error"]'));
+      const errorEls = Array.from(document.querySelectorAll('.ant-form-item-explain-error, .ant-message-error, [class*="error"][class*="message"]'));
       for (const el of errorEls) {
         const txt = el.innerText?.trim();
-        if (txt && txt.length > 0 && txt.length < 200) return txt;
+        // Skip if it's just a single word (likely UI label, not error)
+        if (txt && txt.length > 10 && txt.length < 200 && txt.split(' ').length > 1) {
+          // Also skip if it contains common non-error words
+          if (!/internet|select|type|dropdown|username|password/i.test(txt)) {
+            return txt;
+          }
+        }
       }
       return null;
     });
