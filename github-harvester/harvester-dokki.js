@@ -847,66 +847,137 @@ async function harvestQuota() {
         }
 
         try {
-          // -- Wait for valid captcha image (up to 30s) -------------------------
+          // -- REFRESH LOOP: Try up to 3 refreshes if OCR confidence < 80% ------
+          let ocrAttempt = 0;
+          let votes = null;
           let imgHandle = null;
-          for (let retry = 0; retry < 30; retry++) {
-            imgHandle = await findCaptchaImg();
-            const isValid = await page.evaluate(function(el) {
-              if (!el) return false;
-              if (el.naturalWidth > 0) return true;
-              var r = el.getBoundingClientRect();
-              return r.width > 80 && r.height > 25;
-            }, imgHandle).catch(() => false);
-            if (isValid) break;
+
+          while (ocrAttempt < 3) {
+            ocrAttempt++;
+            if (ocrAttempt > 1) {
+              console.log('    [REFRESH] OCR confidence too low, clicking refresh button...');
+              const refreshed = await page.evaluate(() => {
+                const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
+                if (!modal) return false;
+                // Find refresh/reload button near captcha (usually has reload icon or "Refresh" text)
+                const btns = Array.from(modal.querySelectorAll('button, .anticon-reload, [class*="reload"], [class*="refresh"]'));
+                const refreshBtn = btns.find(b => 
+                  b.className && (b.className.includes('reload') || b.className.includes('refresh')) ||
+                  b.textContent && /refresh|reload/i.test(b.textContent) ||
+                  b.querySelector('.anticon-reload')
+                );
+                if (refreshBtn) {
+                  refreshBtn.click();
+                  return true;
+                }
+                // Fallback: click img itself (some captchas refresh on img click)
+                const img = modal.querySelector('img');
+                if (img) { img.click(); return true; }
+                return false;
+              });
+              if (!refreshed) { console.log('    ! Refresh button not found, proceeding with current image'); break; }
+              await sleep(3000); // wait for new image to load
+            }
+
+            // -- Wait for valid captcha image (up to 30s) -----------------------
             imgHandle = null;
-            await sleep(1000);
+            for (let retry = 0; retry < 30; retry++) {
+              imgHandle = await findCaptchaImg();
+              const isValid = await page.evaluate(function(el) {
+                if (!el) return false;
+                if (el.naturalWidth > 0) return true;
+                var r = el.getBoundingClientRect();
+                return r.width > 80 && r.height > 25;
+              }, imgHandle).catch(() => false);
+              if (isValid) break;
+              imgHandle = null;
+              await sleep(1000);
+            }
+            if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); break; }
+
+            // -- Run ALL 18 filters + build weighted vote pool ------------------
+            // colorOnly = 3 votes, all others = 1 vote
+            // Normalize before grouping to collapse OCR noise variants
+            votes = {};
+            let filtersVoted = 0;
+
+            for (const filter of ALL_FILTERS) {
+              const b64 = await canvasProcess(imgHandle, filter);
+              if (!b64) continue;
+              const texts = await ocrRead(b64);
+              // Prefer exact 5-char; also accept 6+ truncated to 5 as fallback
+              const raw = texts.find(function(t) { return t.length === 5; }) ||
+                          (texts.find(function(t) { return t.length > 5; }) || '').slice(0, 5) || null;
+              console.log('    [' + filter + '] OCR:', JSON.stringify(texts), raw ? '[OK]' : '[SKIP]');
+              if (!raw || raw.length < 5) continue;
+              filtersVoted++;
+              const normed = normalizeOCR(raw);
+              const weight = filter === 'colorOnly' ? 3 : 1;
+              if (!votes[normed]) votes[normed] = { weight: 0, best: raw };
+              votes[normed].weight += weight;
+              // colorOnly's reading takes precedence as the "best" original for submission
+              if (filter === 'colorOnly') votes[normed].best = raw;
+            }
+
+            if (!Object.keys(votes).length) { console.log('    ! No 5-char result from any filter'); continue; }
+
+            const ranked = Object.entries(votes).sort(function(a, b) { return b[1].weight - a[1].weight; });
+            const maxWeight = ranked[0][1].weight;
+            const totalPossible = filtersVoted; // rough estimate (colorOnly=3, others=1)
+            const confidence = (maxWeight / totalPossible) * 100;
+            console.log('    [VOTE] Results:', ranked.map(function(e) { return e[0]+'(w='+e[1].weight+')'; }).join(', '));
+            console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / voted=' + filtersVoted + ')');
+
+            if (confidence >= 80 || ocrAttempt >= 3) {
+              console.log('    [OCR] Confidence acceptable or max refreshes reached — proceeding to submit');
+              break;
+            } else {
+              console.log('    [OCR] Confidence < 80%, will refresh captcha image');
+              votes = null; // reset for next attempt
+            }
           }
-          if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); continue; }
 
-          // -- Run ALL 18 filters + build weighted vote pool --------------------
-          // colorOnly = 3 votes, all others = 1 vote
-          // Normalize before grouping to collapse OCR noise variants
-          const votes = {};
-          const variantIndex = (round - 1) % 3;
-          const variantLabel = ['orig','UPPER','lower'][variantIndex];
-
-          for (const filter of ALL_FILTERS) {
-            const b64 = await canvasProcess(imgHandle, filter);
-            if (!b64) continue;
-            const texts = await ocrRead(b64);
-            // Prefer exact 5-char; also accept 6+ truncated to 5 as fallback
-            const raw = texts.find(function(t) { return t.length === 5; }) ||
-                        (texts.find(function(t) { return t.length > 5; }) || '').slice(0, 5) || null;
-            console.log('    [' + filter + '] OCR:', JSON.stringify(texts), raw ? '[OK]' : '[SKIP]');
-            if (!raw || raw.length < 5) continue;
-            const normed = normalizeOCR(raw);
-            const weight = filter === 'colorOnly' ? 3 : 1;
-            if (!votes[normed]) votes[normed] = { weight: 0, best: raw };
-            votes[normed].weight += weight;
-            // colorOnly's reading takes precedence as the "best" original for submission
-            if (filter === 'colorOnly') votes[normed].best = raw;
+          if (!votes || !Object.keys(votes).length) { 
+            console.log('    ! No acceptable OCR result after 3 refresh attempts'); 
+            continue; 
           }
-
-          if (!Object.keys(votes).length) { console.log('    ! No 5-char result from any filter'); continue; }
 
           const ranked = Object.entries(votes).sort(function(a, b) { return b[1].weight - a[1].weight; });
-          console.log('    [VOTE] Results:', ranked.map(function(e) { return e[0]+'(w='+e[1].weight+')'; }).join(', '));
 
-          // -- Submit top-2 in the same round -----------------------------------
-          const top2 = ranked.slice(0, 2);
-          for (const entry of top2) {
+          // -- Submit top-5 candidates with 7 case variants each ----------------
+          const top5 = ranked.slice(0, 5);
+          const triedVariants = {}; // dedup tracker
+
+          for (const entry of top5) {
             if (captchaSolved) break;
             const orig = entry[1].best;
-            const attempt = variantIndex === 1 ? orig.toUpperCase()
-                          : variantIndex === 2 ? orig.toLowerCase()
-                          : orig;
-            console.log('    -> Trying [' + variantLabel + '] w=' + entry[1].weight + ':', attempt);
-            captchaSolved = await submitAnswer(attempt);
-            if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
-            console.log('    X Wrong "' + attempt + '"');
-            const stillOpen = await isModalOpen();
-            if (!stillOpen) { if (!page.url().includes('login')) captchaSolved = true; break; }
-            await sleep(1500);
+            
+            // Generate 7 case variants
+            const variants = [
+              orig,                                                    // orig
+              orig.toUpperCase(),                                      // UPPER
+              orig.toLowerCase(),                                      // lower
+              orig.charAt(0).toUpperCase() + orig.slice(1).toLowerCase(), // Capitalized
+              orig.charAt(0).toLowerCase() + orig.slice(1).toUpperCase(), // iNVERTED
+              orig.split('').map(function(c, i) { return i % 2 === 0 ? c.toLowerCase() : c.toUpperCase(); }).join(''), // aLtErNaTe
+              orig.split('').map(function(c, i) { return i % 2 === 0 ? c.toUpperCase() : c.toLowerCase(); }).join('')  // AlTeRnAtE
+            ];
+
+            for (let v = 0; v < variants.length; v++) {
+              if (captchaSolved) break;
+              const attempt = variants[v];
+              if (triedVariants[attempt]) continue; // skip duplicate
+              triedVariants[attempt] = true;
+
+              const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn'];
+              console.log('    -> Trying [' + variantNames[v] + '] w=' + entry[1].weight + ':', attempt);
+              captchaSolved = await submitAnswer(attempt);
+              if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
+              console.log('    X Wrong "' + attempt + '"');
+              const stillOpen = await isModalOpen();
+              if (!stillOpen) { if (!page.url().includes('login')) captchaSolved = true; break; }
+              await sleep(1500);
+            }
           }
         } catch (e) {
           console.log('    ! Error:', e.message);
