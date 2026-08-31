@@ -1,18 +1,16 @@
 ﻿name: Cloud Quota Harvester - Dokki
 
 on:
-  schedule:
-    # GitHub Actions cron (backup if webhook fails)
-    # 00:20, 01:50, 03:20, 04:50, 06:20, 07:50...
-    - cron: '20 */2 * * *'      # :20 of even hours
-    - cron: '50 1-23/2 * * *'   # :50 of odd hours
+  # GitHub Actions cron DISABLED - using external webhook only
+  # (uncomment lines below if webhook service fails)
+  # schedule:
+  #   - cron: '20 */2 * * *'
+  #   - cron: '50 1-23/2 * * *'
   
   # PRIMARY TRIGGER: External webhook (100% reliable timing)
-  # Triggered by cron-job.org every 90 minutes exactly
   repository_dispatch:
     types: [harvest_dokki]
   
-  # Manual trigger
   workflow_dispatch:
 
 env:
