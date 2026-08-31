@@ -1084,13 +1084,33 @@ if (postLoginState === 'blocked' || postLoginState === 'unknown') {
 
           const sorted = [...candidates.entries()].sort((a, b) => b[1] - a[1]);
           sorted.forEach(([k, v]) => console.log('      "' + k + '" = ' + v + ' votes'));
+          
+          // COLORONLY PRIORITY: If colorOnly returned a result, try it FIRST regardless of vote count
+          let colorOnlyAnswer = null;
+          if (imgHandle) {
+            const colorOnlyB64 = await canvasProcess(imgHandle, 'colorOnly');
+            if (colorOnlyB64) {
+              const colorOnlyTexts = await ocrRead(colorOnlyB64);
+              if (colorOnlyTexts.length > 0) {
+                colorOnlyAnswer = colorOnlyTexts[0];
+                console.log('    [COLORONLY PRIORITY] Will try colorOnly answer FIRST: "' + colorOnlyAnswer + '"');
+              }
+            }
+          }
+          
           const bestAnswer = sorted[0][0];
           console.log('    [CONSENSUS] Winner: "' + bestAnswer + '" (' + sorted[0][1] + ' votes)');
 
-          const variants = [...new Set([bestAnswer, bestAnswer.toUpperCase(), bestAnswer.toLowerCase()])];
-          console.log('    [VARIANTS]', variants.join(', '));
+          // Build attempt order: colorOnly first (if exists and different), then consensus, then rest
+          const attemptsToTry = [];
+          if (colorOnlyAnswer && colorOnlyAnswer.toLowerCase() !== bestAnswer.toLowerCase()) {
+            attemptsToTry.push(...[colorOnlyAnswer, colorOnlyAnswer.toUpperCase(), colorOnlyAnswer.toLowerCase()]);
+          }
+          attemptsToTry.push(...[bestAnswer, bestAnswer.toUpperCase(), bestAnswer.toLowerCase()]);
+          const uniqueAttempts = [...new Set(attemptsToTry)];
+          console.log('    [VARIANTS]', uniqueAttempts.join(', '));
 
-          for (const attempt of variants) {
+          for (const attempt of uniqueAttempts) {
             captchaSolved = await submitAnswer(attempt);
             if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED with "' + attempt + '" on round ' + round + ' <<<'); break; }
             console.log('    X Wrong "' + attempt + '", trying next variant...');
