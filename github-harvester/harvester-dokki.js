@@ -581,50 +581,80 @@ async function harvestQuota() {
     console.log('  [HUMAN] pause', delay4, 'ms');
     await sleep(delay4);
 
-    // ======================================
+    // ======================================    // ======================================
     console.log('STEP 5: SUBMIT');
     // ======================================
-    await tryMethods([
-      async () => {
-        const clicked = await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button'));
-          const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) {
-            console.log('[SUBMIT] Found button:', btn.textContent.trim(), 'disabled:', btn.disabled);
-            btn.click();
-            return { found: true, text: btn.textContent.trim(), disabled: btn.disabled };
-          }
-          return { found: false };
-        });
-        console.log('    [SUBMIT] Button click result:', JSON.stringify(clicked));
-        await sleep(6000);
-        console.log('    local harvester method');
-      },
-      async () => {
-        await page.keyboard.press('Enter');
-        await sleep(10000);
-        console.log('    press Enter');
-      },
-      async () => {
-        const btns = await page.$$('button');
-        if (btns.length) await btns[0].click();
-        await sleep(10000);
-        console.log('    first button');
-      },
-      async () => {
-        await page.click('button[type="submit"]').catch(() => {});
-        await sleep(10000);
-        console.log('    submit button');
-      },
-      async () => {
-        await page.evaluate(() => { document.querySelector('form')?.submit(); });
-        await sleep(10000);
-        console.log('    form.submit()');
-      }
-    ], 'SUBMIT', 20000);
+    // CRITICAL: React/Ant Design forms need REAL mouse events, not DOM .click()
+    // Use Puppeteer native click (dispatches real mousedown/mouseup/click events)
+    await (async () => {
+      let submitDone = false;
 
-    // ======================================
-    // ======================================
+      // Method 1: Puppeteer native click via bounding box (best for React)
+      try {
+        const btnHandle = await page.evaluateHandle(() => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          return btns.find(b => /login/i.test(b.textContent) || b.className.includes('primary')) || null;
+        });
+        const box = btnHandle ? await btnHandle.asElement()?.boundingBox() : null;
+        if (box) {
+          const x = box.x + box.width / 2;
+          const y = box.y + box.height / 2;
+          console.log('  [SUBMIT] M1: Native puppeteer click at', Math.round(x), Math.round(y));
+          await page.mouse.move(x, y);
+          await sleep(200);
+          await page.mouse.click(x, y);
+          submitDone = true;
+          console.log('  [SUBMIT] M1 SUCCESS');
+        }
+      } catch(e) { console.log('  [SUBMIT] M1 err:', e.message); }
+
+      // Method 2: page.click() on primary button selector
+      if (!submitDone) {
+        try {
+          await page.click('button.ant-btn-primary');
+          submitDone = true;
+          console.log('  [SUBMIT] M2: page.click(.ant-btn-primary) SUCCESS');
+        } catch(e) { console.log('  [SUBMIT] M2 err:', e.message); }
+      }
+
+      // Method 3: page.click() on login text button
+      if (!submitDone) {
+        try {
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const btn = btns.find(b => /login/i.test(b.textContent));
+            if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          });
+          submitDone = true;
+          console.log('  [SUBMIT] M3: MouseEvent dispatch SUCCESS');
+        } catch(e) { console.log('  [SUBMIT] M3 err:', e.message); }
+      }
+
+      // Method 4: Enter key on password field (most reliable for forms)
+      if (!submitDone) {
+        try {
+          await page.focus('#login_password_input_01');
+          await sleep(300);
+          await page.keyboard.press('Enter');
+          submitDone = true;
+          console.log('  [SUBMIT] M4: Enter on password field SUCCESS');
+        } catch(e) { console.log('  [SUBMIT] M4 err:', e.message); }
+      }
+
+      // Method 5: Tab to button then Enter
+      if (!submitDone) {
+        try {
+          await page.keyboard.press('Tab');
+          await sleep(300);
+          await page.keyboard.press('Enter');
+          submitDone = true;
+          console.log('  [SUBMIT] M5: Tab+Enter SUCCESS');
+        } catch(e) { console.log('  [SUBMIT] M5 err:', e.message); }
+      }
+
+      if (!submitDone) throw new Error('All submit methods failed');
+    })();
+
     // POST-SUBMIT: Race - URL change vs captcha modal vs T&C vs block
     // ======================================
     console.log('  Waiting for login result...');
