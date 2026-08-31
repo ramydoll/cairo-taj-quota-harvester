@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer-extra');
+﻿const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fetch = require('node-fetch');
 
@@ -160,10 +160,10 @@ async function harvestQuota() {
   console.log('ًںڑ€ STARTING...\n');
   let browser, page;
 
-  // â”€â”€ Session Cookie Helpers (Line 104) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ Session Cookie Helpers (Dokki) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function loadSavedCookies() {
     try {
-      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_104?key=${FIREBASE_API_KEY}`;
+      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       const res = await fetch(url);
       if (!res.ok) return null;
       const doc = await res.json();
@@ -179,13 +179,13 @@ async function harvestQuota() {
 
   async function saveCookies(cookies) {
     try {
-      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_104?key=${FIREBASE_API_KEY}`;
+      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       await fetch(url, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields: {
           cookies:  { stringValue: JSON.stringify(cookies) },
           savedAt:  { stringValue: new Date().toISOString() },
-          line:     { stringValue: '104' }
+          line:     { stringValue: 'dokki' }
         }})
       });
       console.log('  [SESSION] Cookies saved to Firestore âœ“');
@@ -194,7 +194,7 @@ async function harvestQuota() {
 
   async function clearCookies() {
     try {
-      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_104?key=${FIREBASE_API_KEY}`;
+      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields: { cookies: { stringValue: '' }, savedAt: { stringValue: '' } }})
       });
@@ -811,28 +811,17 @@ async function harvestQuota() {
       const pageState = await page.evaluate(() => {
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
-        // T&C detection — WE shows a "Terms & Conditions" modal that must be accepted
         const hasTnC = text.includes('terms') || text.includes('conditions') ||
                        text.includes('accept') || text.includes('agree') ||
-                       text.includes('\u0627\u0644\u0634\u0631\u0648\u0637') || // الشروط
-                       text.includes('\u0648\u0627\u0641\u0642');               // وافق
+                       text.includes('\u0627\u0644\u0634\u0631\u0648\u0637') ||
+                       text.includes('\u0648\u0627\u0641\u0642');
         const hasCaptcha = (!!modal && !hasTnC) || text.includes('verification') || text.includes('enter code');
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') || text.includes('try again') ||
                           text.includes('blocked') || text.includes('\u0645\u062d\u0627\u0648\u0644\u0627\u062a') ||
                           text.includes('\u0627\u0644\u062d\u062f \u0627\u0644\u0627\u0642\u0635\u0649') ||
                           text.includes('\u0645\u0631\u0647 \u0627\u062e\u0631\u0649');
-        // Find T&C accept button
-        let tnCBtn = null;
-        if (hasTnC && modal) {
-          const btns = Array.from(modal.querySelectorAll('button, [class*="btn"], [class*="button"], [class*="accept"], [class*="ok"]'));
-          tnCBtn = btns.find(b => {
-            const t = b.textContent.toLowerCase();
-            return t.includes('accept') || t.includes('agree') || t.includes('ok') ||
-                   t.includes('\u0642\u0628\u0648\u0644') || t.includes('\u0645\u0648\u0627\u0641\u0642');
-          });
-        }
-        return { hasCaptcha, isBlocked, hasTnC, tnCBtn: !!tnCBtn, text: text.slice(0, 200) };
+        return { hasCaptcha, isBlocked, hasTnC, text: text.slice(0, 200) };
       });
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
@@ -840,14 +829,12 @@ async function harvestQuota() {
         console.log('  [BLOCKED] Page text:', pageState.text.slice(0, 150));
         break;
       }
-      // T&C modal — click accept and keep waiting for navigation
       if (pageState.hasTnC) {
         console.log('  [T&C] Terms & Conditions modal detected, accepting...');
         const accepted = await page.evaluate(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
           if (!modal) return false;
           const btns = Array.from(modal.querySelectorAll('button, [class*="btn"], [class*="button"]'));
-          // Prefer rightmost/last button (usually "Accept" / "OK")
           const acceptBtn = btns.reverse().find(b => {
             const t = b.textContent.toLowerCase();
             return t.includes('accept') || t.includes('agree') || t.includes('ok') ||
@@ -859,7 +846,7 @@ async function harvestQuota() {
         });
         console.log('  [T&C] Accept action result:', accepted);
         await sleep(1500);
-        continue; // keep polling — after T&C, WE may show captcha or navigate
+        continue;
       }
       if (pageState.hasCaptcha) {
         postLoginState = 'captcha';
@@ -872,7 +859,6 @@ async function harvestQuota() {
     if (postLoginState === 'unknown') {
       throw new Error('Still on login page - no navigation or captcha after 20s');
     }
-
     // IP block or silent fail â€” switch to Tor and retry (max 2 Tor retries)
     if (postLoginState === "blocked" || postLoginState === "unknown") {
       await clearCookies();
@@ -1221,7 +1207,7 @@ async function harvestQuota() {
           // Collect OCR candidates across all filters
           const candidates = new Map();
           const addCandidate = (t, score) => {
-            // STRICT: only 5-letter results (WE captcha always 5 chars)
+            // STRICT: only 5-letter results
             if (t && t.length === 5) {
               const key = t.toLowerCase();
               const existing = [...candidates.keys()].find(k => k.toLowerCase() === key);
@@ -1236,8 +1222,8 @@ async function harvestQuota() {
               const b64 = await canvasProcess(imgHandle, filter);
               if (!b64) continue;
               const texts = await ocrRead(b64);
-              if (texts.length > 0) console.log('      [' + filter + ']: ' + texts[0]);
-              // colorOnly gets 2x votes (4 for first result, 2 for others)
+              console.log('    [canvas-' + filter + '] OCR:', JSON.stringify(texts));
+              // colorOnly gets 2x votes
               const weight = filter === 'colorOnly' ? 2 : 1;
               texts.forEach((t, i) => addCandidate(t, (i === 0 ? 2 : 1) * weight));
             }
@@ -1248,7 +1234,10 @@ async function harvestQuota() {
             texts.forEach((t, i) => addCandidate(t, i === 0 ? 2 : 1));
           }
 
+          if (candidates.size === 0) { console.log('    ! No valid OCR candidates'); continue; }
 
+          const bestAnswer = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0][0];
+          console.log('    Candidates:', JSON.stringify([...candidates.entries()]), '-> best:', bestAnswer);
 
           if (candidates.size === 0) { console.log('    ! No valid OCR candidates'); continue; }
           // Consensus voting
@@ -1357,6 +1346,305 @@ async function harvestQuota() {
     // Dismiss any WE promotional ads
     await dismissAds();
 
+    // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+    console.log('STEP 5.5: LINE SWITCHER (Dokki)');
+    // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+    console.log('  Switching to line 0237600094...');
+
+    // CRITICAL: The WE portal does a session refresh after line switch that can
+    // redirect back to #/login within seconds. The only reliable approach is to
+    // extract the data THE MOMENT we confirm the correct page is showing â€”
+    // before the redirect can happen. We capture data inside the switcher itself.
+
+    // Helper: extract all quota data from the current page state
+    async function extractNow() {
+      const result = await page.evaluate(() => {
+        const spans = Array.from(document.querySelectorAll('span, div, p'));
+        let remaining = null, used = null, balance = null, plan = null;
+        function isNumericText(t) {
+          if (!t) return false;
+          const s = t.replace(/,/g, '').trim();
+          return /^\d+(\.\d+)?$/.test(s) && !s.startsWith('0237') && !s.startsWith('023');
+        }
+        for (let i = 0; i < spans.length; i++) {
+          const t = spans[i].innerText?.trim();
+          if (!t || t.length > 100) continue;
+          if (t === 'Remaining') {
+            for (let b = 1; b <= 3; b++) {
+              const c = spans[i-b]?.innerText?.trim();
+              if (isNumericText(c)) { remaining = c; break; }
+            }
+          }
+          if (t === 'Used') {
+            for (let b = 1; b <= 3; b++) {
+              const c = spans[i-b]?.innerText?.trim();
+              if (isNumericText(c)) { used = c; break; }
+            }
+          }
+          if (t === 'Current Balance') {
+            for (let f = 1; f <= 5; f++) {
+              const c = spans[i+f]?.innerText?.trim();
+              if (isNumericText(c)) { balance = c; break; }
+            }
+          }
+          if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
+        }
+        if (!remaining) {
+          // Fallback: regex on full page text
+          const text = document.body.innerText;
+          const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
+          const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
+          const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i) || text.match(/([\d,]+\.?\d+)\s*EGP/i);
+          const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
+          if (!r) return null;
+          return { remaining: r[1], used: u?.[1]||'0', balance: b?.[1]||'0', plan: p?.[0]?.trim()||'Unknown' };
+        }
+        return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
+      });
+      if (!result) return null;
+      const parsed = {
+        remaining: stripNum(result.remaining),
+        used: stripNum(result.used) || 0,
+        balance: stripNum(result.balance) || 0,
+        plan: result.plan
+      };
+      return (parsed.remaining || parsed.remaining === 0) ? parsed : null;
+    }
+
+    // Helper: check page is showing correct line with actual data
+    // IMPORTANT: checks the ACTIVE line widget (top-left "You are currently managing")
+    // NOT just text.includes() which can false-positive from hidden dropdown options
+    async function checkPage094() {
+      return await page.evaluate(() => {
+        // Method 1: Check the active line widget specifically
+        // The "You are currently managing" shows the ACTIVE line number
+        const activeEl = document.querySelector(
+          '#accountOverview_currentNumber, .ant-select-selection-item, [class*="currentNumber"], [class*="current-number"]'
+        );
+        const activeText = activeEl ? activeEl.innerText?.trim() : '';
+
+        // Method 2: Check the small line number display near "You are currently managing"
+        const managingEls = Array.from(document.querySelectorAll('span, div'));
+        let managingLine = '';
+        for (let i = 0; i < managingEls.length; i++) {
+          const t = managingEls[i].innerText?.trim();
+          if (t && t.includes('currently managing')) {
+            // The line number is usually in a nearby sibling or child
+            const nearby = managingEls[i+1]?.innerText?.trim() || managingEls[i+2]?.innerText?.trim() || '';
+            if (nearby.includes('023760009')) { managingLine = nearby; break; }
+            // Also check children
+            const child = managingEls[i].querySelector('[class*="number"], [class*="select"]');
+            if (child) { managingLine = child.innerText?.trim(); break; }
+          }
+        }
+
+        // Method 3: Look for 0237600094 specifically in small/label elements (not huge containers)
+        let foundIn094Widget = false;
+        for (const el of document.querySelectorAll('span, a, button, label, .ant-select-selection-item')) {
+          const t = el.innerText?.trim();
+          if (t && t.includes('0237600094') && t.length < 20) {
+            foundIn094Widget = true;
+            break;
+          }
+        }
+
+        const rem = document.body.innerText.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i)?.[1] || '';
+        const bal = document.body.innerText.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i)?.[1]
+                 || document.body.innerText.match(/([\d,]+\.?\d+)\s*EGP/i)?.[1] || '0';
+        const balNum = parseFloat(bal.replace(/,/g, '')) || 0;
+
+        // Line 0237600094 has balance > 3000 EGP (line 0237600093 has ~1923 EGP)
+        const isCorrectByBalance = balNum > 3000;
+
+        const has094 = activeText.includes('0237600094') || managingLine.includes('0237600094') || foundIn094Widget || isCorrectByBalance;
+
+        return {
+          has094,
+          activeText,
+          managingLine,
+          foundIn094Widget,
+          isCorrectByBalance,
+          balNum,
+          rem,
+          hasRemaining: !!rem
+        };
+      }).catch(() => ({ has094: false, activeText: '', managingLine: '', foundIn094Widget: false, isCorrectByBalance: false, balNum: 0, rem: '', hasRemaining: false }));
+    }
+
+    // The captured data from inside the switcher (avoids race condition)
+    let switcherCapturedData = null;
+
+    await tryMethods([
+      // M1: Click dropdown â†’ select 0237600094 â†’ capture data immediately on confirmation
+      async () => {
+        await page.waitForFunction(() => {
+          const t = document.body.innerText;
+          return t.includes('currently managing') || t.includes('Remaining');
+        }, { timeout: 15000 });
+        await sleep(1500);
+        console.log('    Pre-switch URL:', page.url());
+
+        // Open the line switcher dropdown
+        const dropdowns = await page.$$('.ant-select-selector, .ant-select');
+        if (!dropdowns.length) throw new Error('Dropdown not found');
+        await dropdowns[0].click();
+        await sleep(1500);
+
+        // Click 0237600094
+        const clicked = await page.evaluate(() => {
+          const opts = Array.from(document.querySelectorAll(
+            '.ant-select-item-option-content, .ant-select-item, li, option'
+          ));
+          const t = opts.find(o => o.textContent && o.textContent.includes('0237600094'));
+          if (t) { t.click(); return t.textContent.trim(); }
+          return null;
+        });
+        if (!clicked) throw new Error('Option 0237600094 not found');
+        console.log('    Clicked:', clicked);
+
+        // Poll aggressively â€” capture data THE MOMENT the page shows 0237600094 AND full data loaded
+        for (let w = 0; w < 30; w++) {
+          await sleep(1000);
+          const url = page.url();
+          const check = await checkPage094();
+
+          // If stuck on login after 5s, fail this method
+          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login after line switch');
+
+          // CRITICAL: Must satisfy ALL conditions for valid capture:
+          // 1. check.hasRemaining = true (data visible)
+          // 2. check.has094 = true (correct line showing)
+          // 3. balance > 3000 (line 94 has ~9856 EGP, line 93 has ~1923 EGP)
+          // 4. balance > 0 (data fully loaded, not still loading)
+          // 5. plan !== 'Unknown' (full page rendered)
+          // 6. remaining + used > 300 GB (line 94 = 750GB plan, line 93 = 250GB plan)
+          //    This catches mixed-state where balance updated but remaining/used still from line 93
+          if (check.hasRemaining && check.has094) {
+            const captured = await extractNow();
+            if (captured) {
+              const totalGB = (captured.remaining || 0) + (captured.used || 0);
+              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
+                switcherCapturedData = captured;
+                console.log('    âœ“ M1 FULL DATA CAPTURED: remaining=' + captured.remaining + ' used=' + captured.used + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance + ' plan=' + captured.plan);
+                return; // SUCCESS
+              } else if (captured.balance > 0 && captured.balance < 3000) {
+                console.log('    âڑ  (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 â€” WRONG LINE (093), waiting for 094...');
+              } else if (captured.balance === 0) {
+                console.log('    âڈ³ (' + (w+1) + 's) Balance=0, page still loading... rem=' + captured.remaining);
+              } else if (captured.plan === 'Unknown') {
+                console.log('    âڈ³ (' + (w+1) + 's) Plan=Unknown, page still rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
+              } else if (totalGB <= 300) {
+                console.log('    âڑ  (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094âœ“) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) â€” waiting for full 094 data...');
+              } else {
+                console.log('    âڈ³ (' + (w+1) + 's) Data incomplete, waiting... rem=' + captured.remaining + ' bal=' + captured.balance + ' total=' + totalGB.toFixed(1));
+              }
+            } else {
+              console.log('    âڈ³ (' + (w+1) + 's) extractNow returned null, waiting...');
+            }
+          } else {
+            console.log('    âڈ³ (' + (w+1) + 's) URL:' + url.split('#')[1] + ' | has094:' + check.has094 + ' | hasRem:' + check.hasRemaining + ' | bal:' + check.balNum);
+          }
+        }
+        throw new Error('M1: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 30s');
+      },
+
+      // M2: Broad evaluate click â†’ same capture strategy
+      async () => {
+        await sleep(2000);
+        // Try all possible selectors for the dropdown
+        await page.evaluate(() => {
+          // Try ant-select first
+          const sel = document.querySelector('.ant-select-selector, .ant-select');
+          if (sel) sel.click();
+        });
+        await sleep(1500);
+        // Click target line
+        await page.evaluate(() => {
+          for (const el of document.querySelectorAll('div, li, option, span, a, .ant-select-item')) {
+            if (el.textContent && el.textContent.trim().includes('0237600094')) { el.click(); return; }
+          }
+        });
+        console.log('    Broad click done, waiting for page...');
+
+        // Same aggressive capture strategy with ALL verification criteria
+        for (let w = 0; w < 25; w++) {
+          await sleep(1000);
+          const url = page.url();
+          const check = await checkPage094();
+
+          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login');
+
+          // ALL 6 conditions must be true for valid capture
+          if (check.hasRemaining && check.has094) {
+            const captured = await extractNow();
+            if (captured) {
+              const totalGB = (captured.remaining || 0) + (captured.used || 0);
+              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
+                switcherCapturedData = captured;
+                console.log('    âœ“ M2 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
+                return;
+              } else if (captured.balance > 0 && captured.balance < 3000) {
+                console.log('    âڑ  (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 â€” WRONG LINE (093)');
+              } else if (captured.balance === 0) {
+                console.log('    âڈ³ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
+              } else if (captured.plan === 'Unknown') {
+                console.log('    âڈ³ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
+              } else if (totalGB <= 300) {
+                console.log('    âڑ  (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + 'âœ“ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
+              }
+            }
+          } else {
+            console.log('    âڈ³ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
+          }
+        }
+        throw new Error('M2: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
+      },
+
+      // M3: page.select() + capture
+      async () => {
+        await sleep(2000);
+        await page.select('select', '0237600094').catch(() => {});
+        for (let w = 0; w < 25; w++) {
+          await sleep(1000);
+          const url = page.url();
+          const check = await checkPage094();
+
+          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login');
+
+          // ALL 6 conditions must be true for valid capture
+          if (check.hasRemaining && check.has094) {
+            const captured = await extractNow();
+            if (captured) {
+              const totalGB = (captured.remaining || 0) + (captured.used || 0);
+              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
+                switcherCapturedData = captured;
+                console.log('    âœ“ M3 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
+                return;
+              } else if (captured.balance > 0 && captured.balance < 3000) {
+                console.log('    âڑ  (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 â€” WRONG LINE (093)');
+              } else if (captured.balance === 0) {
+                console.log('    âڈ³ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
+              } else if (captured.plan === 'Unknown') {
+                console.log('    âڈ³ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
+              } else if (totalGB <= 300) {
+                console.log('    âڑ  (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + 'âœ“ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
+              }
+            }
+          } else {
+            console.log('    âڈ³ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
+          }
+        }
+        throw new Error('M3: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
+      }
+    ], 'LINE SWITCHER', 45000);
+
+    console.log('  âœ“ Switched to 0237600094 | captured data:', switcherCapturedData ? 'YES' : 'NO');
+    console.log('  Current URL:', page.url(), '\n');
+
+    // Dismiss any WE promotional ads
+    await dismissAds();
+
+    // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
     console.log('STEP 6: EXTRACT');
     // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
 
@@ -1444,7 +1732,7 @@ async function harvestQuota() {
     // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
     const now = new Date().toISOString();
     const fields = {
-      '104': { mapValue: { fields: {
+      'dokki': { mapValue: { fields: {
         quota:    { doubleValue: data.remaining },
         maxQuota: { doubleValue: data.remaining + data.used },
         balance:  { doubleValue: data.balance },
@@ -1459,7 +1747,7 @@ async function harvestQuota() {
 
     await tryMethods([
       async () => {
-        const mask = 'updateMask.fieldPaths=%60104%60&updateMask.fieldPaths=lastUpdate';
+        const mask = 'updateMask.fieldPaths=dokki&updateMask.fieldPaths=lastUpdate';
         const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_latest/current?key=${FIREBASE_API_KEY}&${mask}`;
         const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1526,16 +1814,16 @@ async function harvestQuota() {
     console.log('STEP 8.5: LOW QUOTA FLAG');
     // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
     // Write flag to Firestore quota_settings/alerts
-    // line104_low: true  â†’ hourly workflow will run full harvest
-    // line104_low: false â†’ hourly workflow will skip (normal 2h schedule handles it)
+    // dokki_low: true  â†’ hourly workflow will run full harvest
+    // dokki_low: false â†’ hourly workflow will skip (normal 2h schedule handles it)
     try {
       const isLowDokki = data.remaining < 100;
       const alertFields = {
-        line104_low:       { booleanValue: isLowDokki },
-        line104_quota:     { doubleValue: data.remaining },
-        line104_updatedAt: { stringValue: now }
+        dokki_low:       { booleanValue: isLowDokki },
+        dokki_quota:     { doubleValue: data.remaining },
+        dokki_updatedAt: { stringValue: now }
       };
-      const alertMask = 'updateMask.fieldPaths=%60104%60_low&updateMask.fieldPaths=%60104%60_quota&updateMask.fieldPaths=%60104%60_updatedAt';
+      const alertMask = 'updateMask.fieldPaths=dokki_low&updateMask.fieldPaths=dokki_quota&updateMask.fieldPaths=dokki_updatedAt';
       const alertUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/alerts?key=${FIREBASE_API_KEY}&${alertMask}`;
       const alertRes = await fetch(alertUrl, {
         method: 'PATCH',
@@ -1543,7 +1831,7 @@ async function harvestQuota() {
         body: JSON.stringify({ fields: alertFields })
       });
       if (alertRes.ok) {
-        console.log('  âœ“ Low quota flag set: line104_low=' + isLowDokki + ' (' + data.remaining.toFixed(1) + ' GB)\n');
+        console.log('  âœ“ Low quota flag set: dokki_low=' + isLowDokki + ' (' + data.remaining.toFixed(1) + ' GB)\n');
       } else {
         console.log('  âڑ  Flag write failed (non-critical): HTTP ' + alertRes.status);
       }
@@ -1572,7 +1860,7 @@ async function harvestQuota() {
       const statusIcon = rem < 50 ? 'ًں”´' : rem < 100 ? 'ًںں ' : 'âœ…';
 
       const msg = [
-        'ًں“، *Cairo Taj â€” Line 104 Harvest*',
+        'ًں“، *Cairo Taj â€” Dokki Harvest*',
         '',
         `${statusIcon} Quota Remaining: *${rem.toFixed(2)} GB*`,
         `ًں“‰ Used: *${data.used.toFixed(2)} GB*`,
@@ -1627,7 +1915,7 @@ async function harvestQuota() {
     console.log('â”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پâ”پ');
 
     // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
-    // VIGILANCE MODE â€” triggered when quota â‰¤ 50 GB (Line 104)
+    // VIGILANCE MODE â€” triggered when quota â‰¤ 50 GB (Dokki)
     // Stays in same session, refreshes every 13 minutes, harvests
     // until quota â‰¤ 2 GB or session dies (then restarts + re-switches line).
     // Only sends Telegram for Dokki â€” other line unaffected.
@@ -1687,7 +1975,7 @@ async function harvestQuota() {
       async function vigilanceFirestore(vData) {
         const vNow = new Date().toISOString();
         const vFields = {
-          '104': { mapValue: { fields: {
+          'dokki': { mapValue: { fields: {
             quota:     { doubleValue: vData.remaining },
             maxQuota:  { doubleValue: vData.remaining + vData.used },
             balance:   { doubleValue: vData.balance },
@@ -1699,7 +1987,7 @@ async function harvestQuota() {
           }}},
           lastUpdate: { stringValue: vNow }
         };
-        const mask = 'updateMask.fieldPaths=%60104%60&updateMask.fieldPaths=lastUpdate';
+        const mask = 'updateMask.fieldPaths=dokki&updateMask.fieldPaths=lastUpdate';
         const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_latest/current?key=${FIREBASE_API_KEY}&${mask}`;
         const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: vFields }) });
         if (!res.ok) throw new Error('Firestore HTTP ' + res.status);
@@ -1853,7 +2141,7 @@ async function harvestQuota() {
         } catch(e) {}
       }
 
-      // â•گâ•گ MAIN VIGILANCE LOOP (Line 104) â•گâ•گ
+      // â•گâ•گ MAIN VIGILANCE LOOP (Dokki) â•گâ•گ
       while (true) {
         const elapsed = Date.now() - vigilanceStart;
         if (elapsed >= VIGILANCE_MAX_MS) {
@@ -1881,11 +2169,11 @@ async function harvestQuota() {
             const vNow = new Date().toISOString();
             const isLowDokki = vData.remaining < 100;
             const alertFields = {
-              line104_low: { booleanValue: isLowDokki },
-              line104_quota: { doubleValue: vData.remaining },
-              line104_updatedAt: { stringValue: vNow }
+              dokki_low: { booleanValue: isLowDokki },
+              dokki_quota: { doubleValue: vData.remaining },
+              dokki_updatedAt: { stringValue: vNow }
             };
-            const alertMask = 'updateMask.fieldPaths=%60104%60_low&updateMask.fieldPaths=%60104%60_quota&updateMask.fieldPaths=%60104%60_updatedAt';
+            const alertMask = 'updateMask.fieldPaths=dokki_low&updateMask.fieldPaths=dokki_quota&updateMask.fieldPaths=dokki_updatedAt';
             const alertUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/alerts?key=${FIREBASE_API_KEY}&${alertMask}`;
             await fetch(alertUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: alertFields }) });
           } catch(e) { console.log('  âڑ  Flag update failed (non-critical):', e.message); }
@@ -1916,7 +2204,7 @@ async function harvestQuota() {
         }
       }
 
-      console.log('\n[VIGILANCE] Exiting vigilance mode after ' + vigilanceRound + ' rounds (Line 104).');
+      console.log('\n[VIGILANCE] Exiting vigilance mode after ' + vigilanceRound + ' rounds (Dokki).');
     } // end vigilance mode
 
   } catch (error) {
