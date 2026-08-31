@@ -2,8 +2,16 @@
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    # Line 104: Runs every 90 minutes staggered pattern
+    # 00:05, 01:35, 03:05, 04:35, 06:05, 07:35, 09:05, 10:35...
+    # = 16 runs per day instead of 12
+    - cron: '5 */2 * * *'      # :05 of even hours (00:05, 02:05, 04:05...)
+    - cron: '35 1-23/2 * * *'  # :35 of odd hours (01:35, 03:35, 05:35...)
   workflow_dispatch:
+
+env:
+  # Suppress Node deprecation warnings
+  NODE_OPTIONS: --no-deprecation
 
 jobs:
   harvest:
