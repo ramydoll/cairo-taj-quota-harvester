@@ -2,11 +2,17 @@
 
 on:
   schedule:
-    # Line 104: Runs every 90 minutes staggered pattern
-    # 00:05, 01:35, 03:05, 04:35, 06:05, 07:35, 09:05, 10:35...
-    # = 16 runs per day instead of 12
-    - cron: '5 */2 * * *'      # :05 of even hours (00:05, 02:05, 04:05...)
-    - cron: '35 1-23/2 * * *'  # :35 of odd hours (01:35, 03:35, 05:35...)
+    # GitHub Actions cron (backup if webhook fails)
+    # 00:05, 01:35, 03:05, 04:35, 06:05, 07:35...
+    - cron: '5 */2 * * *'      # :05 of even hours
+    - cron: '35 1-23/2 * * *'  # :35 of odd hours
+  
+  # PRIMARY TRIGGER: External webhook (100% reliable timing)
+  # Triggered by cron-job.org every 90 minutes exactly
+  repository_dispatch:
+    types: [harvest_line104]
+  
+  # Manual trigger
   workflow_dispatch:
 
 env:
