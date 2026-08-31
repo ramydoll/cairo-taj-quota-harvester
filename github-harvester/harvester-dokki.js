@@ -6,8 +6,8 @@ puppeteer.use(StealthPlugin());
 
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
-const DOKKI_USERNAME = process.env.DOKKI_USERNAME;
-const DOKKI_PASSWORD = process.env.DOKKI_PASSWORD;
+const WE_USERNAME = process.env.DOKKI_USERNAME;
+const WE_PASSWORD = process.env.DOKKI_PASSWORD;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_GROUP_ID = process.env.TELEGRAM_GROUP_ID; // Group chat for colleague
@@ -50,7 +50,6 @@ async function tryMethods(methods, stepName, timeout) {
   }
 }
 
-<<<<<<< HEAD
 
 // Tor IP rotation helpers
 const { execSync: _torExec } = require('child_process');
@@ -92,28 +91,13 @@ async function harvestQuota() {
   // Save/load cookies via Firestore so we can skip login when session is still valid
   // Cookies stored in quota_settings/session_dokki as a JSON string
   async function loadSavedCookies() {
-=======
-async function harvestQuota() {
-  console.log('🚀 STARTING...\n');
-  let browser, page;
-
-  // ── Session Management: Save/Load ALL session data (Dokki) ────────────────
-  // Saves: cookies, localStorage, sessionStorage, tokens
-  // This allows skipping login entirely when session is still valid
-  
-  // ── Session Management ─────────────────────────────────────────────────────
-  async function loadSavedSession() {
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
     try {
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       const res = await fetch(url);
-      if (!res.ok) { console.log('  [SESSION] Firestore fetch failed:', res.status); return null; }
+      if (!res.ok) return null;
       const doc = await res.json();
       const cookieStr = doc?.fields?.cookies?.stringValue;
-      const localStr = doc?.fields?.localStorage?.stringValue;
-      const sessionStr = doc?.fields?.sessionStorage?.stringValue;
       const savedAt = doc?.fields?.savedAt?.stringValue;
-<<<<<<< HEAD
       if (!cookieStr || !savedAt) return null;
       // Only use cookies saved within last 4 hours
       const age = Date.now() - new Date(savedAt).getTime();
@@ -121,55 +105,31 @@ async function harvestQuota() {
       console.log('  [SESSION] Found saved cookies (' + Math.floor(age/60000) + 'm old)');
       return JSON.parse(cookieStr);
     } catch(e) { console.log('  [SESSION] Could not load cookies:', e.message); return null; }
-=======
-      if (!cookieStr || !savedAt) { console.log('  [SESSION] No session data in Firestore'); return null; }
-      const age = Date.now() - new Date(savedAt).getTime();
-      if (age > 8 * 60 * 60 * 1000) { console.log('  [SESSION] Session expired (>8h old), fresh login'); return null; }
-      const parsed = {
-        cookies: JSON.parse(cookieStr),
-        localStorage: localStr ? JSON.parse(localStr) : {},
-        sessionStorage: sessionStr ? JSON.parse(sessionStr) : {},
-        age: Math.floor(age / 60000)
-      };
-      console.log(`  [SESSION] Found saved session (${parsed.age}m old) - cookies:${parsed.cookies.length} localStorage:${Object.keys(parsed.localStorage).length} sessionStorage:${Object.keys(parsed.sessionStorage).length}`);
-      return parsed;
-    } catch(e) { console.log('  [SESSION] Load error:', e.message); return null; }
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
   }
 
-  async function saveSession(cookies, localData, sessionData) {
+  async function saveCookies(cookies) {
     try {
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields: {
-          cookies:        { stringValue: JSON.stringify(cookies) },
-          localStorage:   { stringValue: JSON.stringify(localData) },
-          sessionStorage: { stringValue: JSON.stringify(sessionData) },
-          savedAt:        { stringValue: new Date().toISOString() }
+          cookies:  { stringValue: JSON.stringify(cookies) },
+          savedAt:  { stringValue: new Date().toISOString() },
+          line:     { stringValue: '104' }
         }})
       });
-<<<<<<< HEAD
       console.log('  [SESSION] Cookies saved to Firestore ✓');
     } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
-=======
-      console.log(`  [SESSION] Saved to Firestore - cookies:${cookies.length} localStorage:${Object.keys(localData).length} sessionStorage:${Object.keys(sessionData).length}`);
-    } catch(e) { console.log('  [SESSION] Save error:', e.message); }
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
   }
 
-  async function clearSession() {
+  async function clearCookies() {
     try {
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: { cookies: { stringValue: '' }, localStorage: { stringValue: '' }, sessionStorage: { stringValue: '' }, savedAt: { stringValue: '' } }})
+        body: JSON.stringify({ fields: { cookies: { stringValue: '' }, savedAt: { stringValue: '' } }})
       });
-<<<<<<< HEAD
       console.log('  [SESSION] Cookies cleared from Firestore');
-=======
-      console.log('  [SESSION] Cleared from Firestore');
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
     } catch(e) {}
   }
   // ──────────────────────────────────────────────────────────────────────────
@@ -177,11 +137,7 @@ async function harvestQuota() {
   try {
     browser = await puppeteer.launch({
       headless: true,
-<<<<<<< HEAD
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH || '/usr/bin/google-chrome-stable',
-=======
-      executablePath: '/usr/bin/google-chrome-stable',
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       protocolTimeout: 60000,
       args: [
         '--no-sandbox',
@@ -224,31 +180,21 @@ async function harvestQuota() {
     });
 
     // ══════════════════════════════════════
-<<<<<<< HEAD
     // STEP 0: TRY SAVED SESSION COOKIES
-=======
-    // STEP 0: TRY SAVED SESSION
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
     // ══════════════════════════════════════
     console.log('STEP 0: SESSION CHECK');
     let sessionValid = false;
-    const savedSession = await loadSavedSession();
-    if (savedSession && savedSession.cookies.length > 0) {
+    const savedCookies = await loadSavedCookies();
+    if (savedCookies && savedCookies.length > 0) {
       try {
-        console.log('  Restoring session (cookies + localStorage + sessionStorage)...');
-        await page.setCookie(...savedSession.cookies);
-        // Inject storage before navigation
-        await page.evaluateOnNewDocument((localData, sessionData) => {
-          try { Object.keys(localData).forEach(k => window.localStorage.setItem(k, localData[k])); } catch(e) {}
-          try { Object.keys(sessionData).forEach(k => window.sessionStorage.setItem(k, sessionData[k])); } catch(e) {}
-        }, savedSession.localStorage, savedSession.sessionStorage);
+        console.log('  Trying saved session cookies...');
+        await page.setCookie(...savedCookies);
         await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
         await sleep(3000);
-        const currentUrl = page.url();
-        console.log('  [SESSION] Post-restore URL:', currentUrl);
-        if (!currentUrl.includes('login') && currentUrl.includes('account')) {
+        const url = page.url();
+        const isLoggedIn = !url.includes('login') && url.includes('account');
+        if (isLoggedIn) {
           sessionValid = true;
-<<<<<<< HEAD
           console.log('  ✓ Session still valid! Skipping login entirely.\n');
         } else {
           console.log('  ✗ Session expired, clearing and doing fresh login');
@@ -257,19 +203,9 @@ async function harvestQuota() {
       } catch(e) {
         console.log('  ✗ Session check failed:', e.message);
         await clearCookies();
-=======
-          console.log('  ✓ Session valid! Skipping login entirely.\n');
-        } else {
-          console.log('  ✗ Session invalid, doing fresh login. URL:', currentUrl);
-          await clearSession();
-        }
-      } catch(e) {
-        console.log('  ✗ Session restore failed:', e.message);
-        await clearSession();
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       }
     } else {
-      console.log('  No saved session, will do fresh login');
+      console.log('  No saved session, will do fresh login\n');
     }
 
     // ══════════════════════════════════════
@@ -305,11 +241,30 @@ async function harvestQuota() {
       },
       // M5: domcontentloaded + very long sleep
       async () => {
-        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 40000 });
-        await sleep(20000);
-        console.log('    domcontentloaded + 20s sleep');
+        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 50000 });
+        console.log('    [CLOUD] Waiting 35s for React mount...');
+        await sleep(35000);
+        const count = await page.evaluate(() => document.querySelectorAll('input').length);
+        console.log('    [CLOUD] Found ' + count + ' inputs after 35s');
+        if (count < 1) {
+          console.log('    [CLOUD] React STILL loading - waiting 20s more...');
+          await sleep(20000);
+          const count2 = await page.evaluate(() => document.querySelectorAll('input').length);
+          if (count2 < 1) throw new Error('No inputs after 55s - page not rendering');
+          console.log('    [CLOUD] Got ' + count2 + ' inputs after 55s total');
+        }
+      },
+      async () => {
+        console.log('    [EMERGENCY] Reloading page to force React mount...');
+        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'load', timeout: 50000 });
+        await sleep(8000);
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
+        console.log('    [EMERGENCY] Waiting 45s post-reload...');
+        await sleep(45000);
+        const count = await page.evaluate(() => document.querySelectorAll('input').length);
+        if (count < 1) throw new Error('Emergency reload failed');
       }
-    ], 'NAVIGATE', 55000);
+    ], 'NAVIGATE', 80000);
 
     console.log('  URL:', page.url());
 
@@ -349,7 +304,7 @@ async function harvestQuota() {
       async () => {
         await page.focus('#login_loginid_input_01');
         await sleep(3000);
-        await page.type('#login_loginid_input_01', DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+        await page.type('#login_loginid_input_01', WE_USERNAME, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    focus + type (local harvester method)');
       },
@@ -358,7 +313,7 @@ async function harvestQuota() {
         const el = await page.$('#login_loginid_input_01');
         if (!el) throw new Error('ID not found');
         await el.click(); await sleep(3000);
-        await el.type(DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+        await el.type(WE_USERNAME, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    $ find + click + type');
       },
@@ -367,7 +322,7 @@ async function harvestQuota() {
         const els = await page.$$('.ant-input');
         if (!els.length) throw new Error('no .ant-input');
         await els[0].click(); await sleep(3000);
-        await els[0].type(DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+        await els[0].type(WE_USERNAME, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    .ant-input class');
       },
@@ -376,7 +331,7 @@ async function harvestQuota() {
         const els = await page.$$('input[type="text"]');
         if (!els.length) throw new Error('no text inputs');
         await els[0].click(); await sleep(3000);
-        await els[0].type(DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+        await els[0].type(WE_USERNAME, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    input[type=text]');
       },
@@ -394,7 +349,7 @@ async function harvestQuota() {
           inp.dispatchEvent(new Event('input', { bubbles: true }));
           inp.dispatchEvent(new Event('change', { bubbles: true }));
           return true;
-        }, DOKKI_USERNAME);
+        }, WE_USERNAME);
         if (!ok) throw new Error('DOM set failed');
         await sleep(3000);
         console.log('    DOM native setter + React events');
@@ -410,7 +365,7 @@ async function harvestQuota() {
           console.log(`    input[${i}] id="${info.id}" type="${info.type}" visible=${info.visible}`);
           if (info.type !== 'password' && info.type !== 'hidden' && info.visible) {
             await all[i].click(); await sleep(3000);
-            await all[i].type(DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+            await all[i].type(WE_USERNAME, { delay: randomDelay(100, 200) });
             await sleep(3000);
             console.log(`    used input[${i}]`);
             return;
@@ -424,7 +379,7 @@ async function harvestQuota() {
         await sleep(3000);
         await page.keyboard.press('Tab');
         await sleep(1000);
-        await page.keyboard.type(DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+        await page.keyboard.type(WE_USERNAME, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    Tab from body + type');
       },
@@ -432,7 +387,7 @@ async function harvestQuota() {
       async () => {
         await page.click('input');
         await sleep(3000);
-        await page.keyboard.type(DOKKI_USERNAME, { delay: randomDelay(100, 200) });
+        await page.keyboard.type(WE_USERNAME, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    click first input + keyboard');
       }
@@ -542,7 +497,7 @@ async function harvestQuota() {
       async () => {
         await page.focus('#login_password_input_01');
         await sleep(3000);
-        await page.type('#login_password_input_01', DOKKI_PASSWORD, { delay: randomDelay(100, 200) });
+        await page.type('#login_password_input_01', WE_PASSWORD, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    focus + type (local harvester method)');
       },
@@ -550,7 +505,7 @@ async function harvestQuota() {
         const el = await page.$('#login_password_input_01');
         if (!el) throw new Error('ID not found');
         await el.click(); await sleep(3000);
-        await el.type(DOKKI_PASSWORD, { delay: randomDelay(100, 200) });
+        await el.type(WE_PASSWORD, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    $ find + click + type');
       },
@@ -558,7 +513,7 @@ async function harvestQuota() {
         const els = await page.$$('input[type="password"]');
         if (!els.length) throw new Error('no password inputs');
         await els[0].click(); await sleep(3000);
-        await els[0].type(DOKKI_PASSWORD, { delay: randomDelay(100, 200) });
+        await els[0].type(WE_PASSWORD, { delay: randomDelay(100, 200) });
         await sleep(3000);
         console.log('    input[type=password]');
       },
@@ -572,7 +527,7 @@ async function harvestQuota() {
           inp.dispatchEvent(new Event('input', { bubbles: true }));
           inp.dispatchEvent(new Event('change', { bubbles: true }));
           return true;
-        }, DOKKI_PASSWORD);
+        }, WE_PASSWORD);
         if (!ok) throw new Error('DOM set failed');
         console.log('    DOM native setter');
       },
@@ -582,7 +537,7 @@ async function harvestQuota() {
           const type = await all[i].evaluate(el => el.type);
           if (type === 'password') {
             await all[i].click(); await sleep(3000);
-            await all[i].type(DOKKI_PASSWORD, { delay: randomDelay(100, 200) });
+            await all[i].type(WE_PASSWORD, { delay: randomDelay(100, 200) });
             await sleep(3000);
             console.log(`    loop found password at input[${i}]`);
             return;
@@ -651,92 +606,15 @@ async function harvestQuota() {
       const pageState = await page.evaluate(() => {
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
-<<<<<<< HEAD
         const hasCaptcha = !!modal || text.includes('verification') || text.includes('enter code');
         // Detect WE block messages
-=======
-        
-        // Differentiate between T&C modal and captcha modal
-        let hasCaptcha = false;
-        let isTermsModal = false;
-        
-        if (modal) {
-          // Check if it's Terms & Conditions modal (has close-terms or start-chat-modal buttons)
-          isTermsModal = !!modal.querySelector('#close-terms, #start-chat-modal, .TC-content, .TC-header');
-          
-          // Check if it's captcha modal (has img/canvas and NOT T&C buttons)
-          const hasImage = !!modal.querySelector('img, canvas');
-          const hasCaptchaText = modal.innerText?.toLowerCase().includes('verification') || 
-                                  modal.innerText?.toLowerCase().includes('enter code') ||
-                                  modal.innerText?.toLowerCase().includes('captcha');
-          
-          hasCaptcha = !isTermsModal && (hasImage || hasCaptchaText);
-        }
-        
-        // Also check body text for verification messages
-        if (!hasCaptcha && (text.includes('verification') || text.includes('enter code'))) {
-          hasCaptcha = true;
-        }
-        
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') || text.includes('try again') ||
                           text.includes('blocked') || text.includes('محاولات') ||
                           text.includes('الحد الاقصى') || text.includes('مره اخرى');
-<<<<<<< HEAD
         return { hasCaptcha, isBlocked, text: text.slice(0, 200) };
       });
 
-=======
-        return { hasCaptcha, isTermsModal, isBlocked, text: text.slice(0, 200) };
-      });
-      
-      // Handle Terms & Conditions modal - must ACCEPT it, not just close
-      if (pageState.isTermsModal) {
-        console.log('  [T&C] Terms & Conditions modal detected, accepting...');
-        const accepted = await page.evaluate(() => {
-          const modal = document.querySelector('.modal.show, .modal[style*="display: block"], .modal[style*="display:block"]') 
-                     || document.querySelector('.TC-content')?.closest('.modal')
-                     || document.querySelector('#close-terms')?.closest('.modal');
-          if (!modal) return false;
-
-          // Scroll modal to bottom first (some T&C require scroll before accept)
-          const body = modal.querySelector('.modal-body, .modal-dialog-scrollable .modal-body');
-          if (body) body.scrollTop = body.scrollHeight;
-
-          // Try to find Accept/Agree/Confirm button (NOT close/dismiss)
-          const allBtns = Array.from(modal.querySelectorAll('button, a.btn, input[type="button"]'));
-          console.log('[T&C] Buttons found:', allBtns.map(b => b.id + '|' + b.textContent?.trim().slice(0,30)).join(' | '));
-
-          const acceptBtn = allBtns.find(b => {
-            const txt = (b.textContent || b.value || b.id || '').toLowerCase().trim();
-            return txt.includes('accept') || txt.includes('agree') || txt.includes('confirm') 
-                || txt.includes('ok') || txt.includes('continue') || txt.includes('proceed')
-                || txt.includes('موافق') || txt.includes('قبول') || txt.includes('اوافق');
-          });
-
-          if (acceptBtn) {
-            console.log('[T&C] Clicking accept button:', acceptBtn.textContent?.trim().slice(0,30));
-            acceptBtn.click();
-            return true;
-          }
-
-          // No accept button found - try close button as last resort
-          const closeBtn = modal.querySelector('#close-terms, .close, [aria-label="Close"]');
-          if (closeBtn) {
-            console.log('[T&C] No accept btn found, using close button');
-            closeBtn.click();
-            return true;
-          }
-          return false;
-        }).catch(() => false);
-
-        console.log('  [T&C] Accept action result:', accepted);
-        await sleep(2000);
-        continue; // Continue waiting loop - do NOT re-click submit
-      }
-      
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
         console.log('  [BLOCKED] WE has blocked this IP/account temporarily');
@@ -752,7 +630,6 @@ async function harvestQuota() {
       await sleep(1000);
     }
 
-<<<<<<< HEAD
     if (postLoginState === 'blocked' || postLoginState === 'unknown') {
       await clearCookies();
       if (_torRetryCount < 2) {
@@ -789,7 +666,7 @@ async function harvestQuota() {
           await page.goto('https://my.te.eg/echannel/', { waitUntil: 'networkidle2', timeout: 30000 });
           await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 15000 });
           // Fill credentials
-          try { await page.focus('#login_loginid_input_01'); await page.type('#login_loginid_input_01', DOKKI_USERNAME, {delay:120}); } catch(e) {}
+          try { await page.focus('#login_loginid_input_01'); await page.type('#login_loginid_input_01', WE_USERNAME, {delay:120}); } catch(e) {}
           await new Promise(r=>setTimeout(r,2000));
           try {
             const si = await page.$('#login_input_type_01');
@@ -801,7 +678,7 @@ async function harvestQuota() {
             }
           } catch(e) { console.log('  [TOR] Dropdown skip:', e.message); }
           await new Promise(r=>setTimeout(r,2000));
-          try { await page.focus('#login_password_input_01'); await page.type('#login_password_input_01', DOKKI_PASSWORD, {delay:120}); } catch(e) {}
+          try { await page.focus('#login_password_input_01'); await page.type('#login_password_input_01', WE_PASSWORD, {delay:120}); } catch(e) {}
           await new Promise(r=>setTimeout(r,3000));
           await page.evaluate(() => { const btns=Array.from(document.querySelectorAll('button')); const btn=btns.find(b=>b.textContent.toLowerCase().includes('login')||b.className.includes('primary')); if(btn)btn.click(); });
           // Wait for result
@@ -830,96 +707,39 @@ async function harvestQuota() {
     // ======================================
     // CAPTCHA ENGINE v4 (only if captcha was detected)
     // ======================================
-=======
-    if (postLoginState === 'blocked') {
-      await clearSession();
-      throw new Error('WE_BLOCKED: Account/IP temporarily blocked. Will auto-retry on next scheduled run.');
-    }
-
-    if (postLoginState === 'unknown') {
-      throw new Error('Still on login page - no navigation or captcha after 20s');
-    }
-
-    // ======================================
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
     if (postLoginState === 'captcha') {
       console.log('  [CAPTCHA] Ultimate Engine v4 starting...\n');
 
-      // HELPER: Find captcha image - tries multiple selectors + debugging
+      // HELPER: Find the captcha image (largest img inside modal)
       async function findCaptchaImg() {
         return await page.evaluateHandle(() => {
-          // Try specific captcha selectors first
-          const specific = document.querySelector('.captcha-img, img[alt*="captcha"], img[alt*="Captcha"], img[src*="captcha"], img[src*="verify"], img[src*="code"]');
-          if (specific && specific.naturalWidth > 0) {
-            console.log('[IMG] Found via specific selector:', specific.src?.slice(0,50));
-            return specific;
-          }
-          
-          // Find modal first
-          const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="Modal"]');
-          if (!modal) {
-            console.log('[IMG] No modal found!');
-            return null;
-          }
-          
-          // Log all images in modal for debugging
-          const allImgs = Array.from(modal.querySelectorAll('img'));
-          console.log('[IMG] Found', allImgs.length, 'images in modal');
-          allImgs.forEach((img, i) => {
-            const r = img.getBoundingClientRect();
-            console.log(`[IMG ${i}] src=${img.src?.slice(0,40)} size=${r.width}x${r.height} natural=${img.naturalWidth}x${img.naturalHeight} visible=${img.offsetParent!==null}`);
-          });
-          
-          // Sort by size and find largest valid image
-          const imgs = allImgs.filter(img => {
-            const r = img.getBoundingClientRect();
-            return r.width > 50 && r.height > 20 && img.offsetParent !== null;
-          });
-          
+          const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
+          if (!modal) return null;
+          const imgs = Array.from(modal.querySelectorAll('img'));
           imgs.sort((a, b) => {
             const aR = a.getBoundingClientRect(), bR = b.getBoundingClientRect();
             return (bR.width * bR.height) - (aR.width * aR.height);
           });
-          
           for (const img of imgs) {
-            // Wait a bit for image to load if naturalWidth is 0
-            if (img.naturalWidth === 0) {
-              console.log('[IMG] Image not loaded yet, src:', img.src?.slice(0,40));
-              continue;
-            }
             const r = img.getBoundingClientRect();
-<<<<<<< HEAD
             if (r.width > 80 && r.height > 25) return img; // naturalWidth removed - always 0 on datacenter IPs
-=======
-            if (r.width > 80 && r.height > 25 && img.naturalWidth > 0) {
-              console.log('[IMG] Selected image:', img.src?.slice(0,50), `size=${r.width}x${r.height}`);
-              return img;
-            }
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
           }
-          
-          console.log('[IMG] No valid image found after filtering');
           return null;
         });
       }
 
-<<<<<<< HEAD
       // HELPER: Canvas preprocessing - 10 extreme filters for WE captcha
       // WE captcha: mixed case+digits, dot noise bg, blue diagonal line
-=======
-      // HELPER: 10 BLUE LINE KILLER filters at 4x scale
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       async function canvasProcess(imgHandle, filter) {
         return await page.evaluate((imgEl, f) => {
           if (!imgEl || !imgEl.naturalWidth) return null;
-          const scale = 4;
+          const scale = 3;
           const c = document.createElement('canvas');
           c.width = imgEl.naturalWidth * scale; c.height = imgEl.naturalHeight * scale;
           const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
           ctx.drawImage(imgEl, 0, 0, c.width, c.height);
           const data = ctx.getImageData(0, 0, c.width, c.height); const d = data.data;
           for (let i = 0; i < d.length; i += 4) {
-<<<<<<< HEAD
             const r=d[i],g=d[i+1],b=d[i+2];
             const lum=0.299*r+0.587*g+0.114*b;
             const sat=Math.max(r,g,b)===0?0:(Math.max(r,g,b)-Math.min(r,g,b))/Math.max(r,g,b);
@@ -935,34 +755,12 @@ async function harvestQuota() {
             else if (f==='t110')      keep=lum<110;
             else if (f==='inv')       keep=(255-lum)<128;
             d[i]=d[i+1]=d[i+2]=keep?0:255; d[i+3]=255;
-=======
-            const r = d[i], g = d[i+1], b = d[i+2];
-            let keep = false;
-            const isBlue = b > 100 && b > r + 20 && b > g + 20;
-            const isGray = Math.abs(r-g) < 20 && Math.abs(g-b) < 20 && Math.abs(r-b) < 20;
-            if (f === 'redOnly')       { keep = r > 80 && (r-g) > 25 && (r-b) > 25 && !isBlue; }
-            else if (f === 'redStrict'){ keep = r > 120 && (r-g) > 50 && (r-b) > 50 && !isBlue; }
-            else if (f === 'redWide')  { keep = r > 60 && (r-g) > 15 && (r-b) > 15 && !isBlue; }
-            else if (f === 'megaRed')  { keep = r > 70 && r > g+20 && r > b+20 && b < 120; }
-            else if (f === 'darkNoBlue') { const lum=0.299*r+0.587*g+0.114*b; keep=lum<140&&!isBlue; }
-            else if (f === 'saturationBoost') { const max=Math.max(r,g,b),min=Math.min(r,g,b),sat=max===0?0:(max-min)/max; keep=sat>0.4&&r>g&&r>b&&!isBlue; }
-            else if (f === 'warmColors') { keep = (r>g+15)&&(r>b+15)&&(r+g>b*1.5)&&!isBlue; }
-            else if (f === 'antiBlue') { keep = !isBlue && !isGray; }
-            else if (f === 'colorOnly') { const max=Math.max(r,g,b),min=Math.min(r,g,b),sat=max===0?0:(max-min)/max; keep=sat>0.3&&r>b&&!isBlue; }
-            else if (f === 'notBlueNotGray') { keep = !isBlue && !(isGray && r > 140); }
-            else if (f === 'blueInverter') { const blueness=b-Math.max(r,g); keep=blueness<-20; }
-            else if (f === 'channelDivide') { const ratio=b>0?r/b:r; keep=ratio>1.5&&r>40; }
-            else if (f === 'hsvIsolation') { const max=Math.max(r,g,b),min=Math.min(r,g,b),delta=max-min; let hue=0; if(delta>0){if(max===r)hue=((g-b)/delta+(g<b?6:0))*60;else if(max===g)hue=((b-r)/delta+2)*60;else hue=((r-g)/delta+4)*60;} const sat=max===0?0:delta/max; keep=((hue>=0&&hue<=50&&sat>0.3)||(sat<0.3&&max<140))&&max>20; }
-            d[i] = d[i+1] = d[i+2] = keep ? 0 : 255;
-            d[i+3] = 255;
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
           }
           ctx.putImageData(data,0,0);
           return c.toDataURL('image/png');
         }, imgHandle, filter);
       }
 
-<<<<<<< HEAD
             // HELPER: OCR with dual PSM modes
       async function ocrRead(imageData) {
         const Tesseract = require('tesseract.js');
@@ -980,31 +778,11 @@ async function harvestQuota() {
           });
           const t2 = r2.data.text.replace(/[^A-Za-z0-9]/g, '').trim();
           if (t2 && t2 !== t1) results.push(t2);
-=======
-      // HELPER: 4 PSM modes - NO character corrections (trust OCR as-is)
-      async function ocrRead(imageData) {
-        const Tesseract = require('tesseract.js');
-        const results = [];
-        for (const mode of ['8','7','6','13']) {
-          try {
-            const r = await Tesseract.recognize(imageData, 'eng', {
-              tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
-              tessedit_pageseg_mode: mode
-            });
-            // Raw OCR - NO corrections - trust what Tesseract reads
-            const text = r.data.text.replace(/[^A-Za-z0-9]/g, '').trim();
-            if (text && text.length >= 4 && text.length <= 6) results.push(text);
-          } catch(e) {}
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
         }
-        return [...new Set(results)];
+        return results;
       }
 
-<<<<<<< HEAD
       // HELPER: Submit captcha answer into modal input
-=======
-      // HELPER: Submit captcha answer
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       async function submitAnswer(answer) {
         console.log('    -> Submitting:', answer);
         const ok = await page.evaluate((ans) => {
@@ -1020,7 +798,6 @@ async function harvestQuota() {
           setter.call(inp, ans);
           inp.dispatchEvent(new Event('input', { bubbles: true }));
           inp.dispatchEvent(new Event('change', { bubbles: true }));
-<<<<<<< HEAD
           // Find the OK/confirm button — NOT Cancel. Look for button with ok/confirm text,
           // or ant-btn-primary class, or the LAST button (Cancel is usually first, Ok is last)
           const allBtns = Array.from(modal.querySelectorAll('button'));
@@ -1028,26 +805,15 @@ async function harvestQuota() {
                       modal.querySelector('button.ant-btn-primary') ||
                       allBtns[allBtns.length - 1]; // last button = OK
           console.log('[captcha] Clicking button:', btn ? btn.textContent.trim() : 'none', 'of', allBtns.length, 'buttons');
-=======
-          const allBtns = Array.from(modal.querySelectorAll('button'));
-          const btn = allBtns.find(b => /ok|confirm|submit/i.test(b.textContent)) ||
-                      modal.querySelector('button.ant-btn-primary') ||
-                      allBtns[allBtns.length - 1];
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
           if (btn) btn.click();
           return true;
         }, answer);
         if (!ok) {
-<<<<<<< HEAD
           console.log('    -> Keyboard fallback');
           await page.keyboard.press('Tab');
           await sleep(200);
           await page.keyboard.type(answer, { delay: 40 });
           await sleep(300);
-=======
-          await page.keyboard.press('Tab'); await sleep(200);
-          await page.keyboard.type(answer, { delay: 40 }); await sleep(300);
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
           await page.keyboard.press('Enter');
         }
         await sleep(5000);
@@ -1056,10 +822,12 @@ async function harvestQuota() {
 
       // HELPER: Check if modal is still open
       async function isModalOpen() {
-        return await page.evaluate(() => !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]'));
+        return await page.evaluate(() => {
+          const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
+          return !!modal;
+        });
       }
 
-<<<<<<< HEAD
       // HELPER: Re-trigger captcha by clicking Login again
       async function retriggerLogin() {
         console.log('    -> Modal closed, re-clicking Login...');
@@ -1088,110 +856,63 @@ async function harvestQuota() {
 
       // MAIN CAPTCHA LOOP (6 rounds — enough to solve, avoids IP block from too many attempts)
       const FILTERS = ['dark','dark2','dark3','nodots','noline','nolineAgg','red','color','t110','inv'];
-=======
-      // MAIN EXTREME CAPTCHA LOOP - 12 rounds, 13 filters, consensus voting
-      const FILTERS = ['redOnly','megaRed','redStrict','redWide','darkNoBlue','saturationBoost','warmColors','antiBlue','colorOnly','notBlueNotGray','blueInverter','channelDivide','hsvIsolation'];
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       let captchaSolved = false;
 
       for (let round = 1; round <= 6 && !captchaSolved; round++) {
         console.log('  -- Round', round, '/ 12 --');
 
+        // Wait for captcha modal to be present (it appears automatically after wrong answer)
         if (round > 1) {
           let modalFound = false;
           for (let w = 0; w < 10; w++) {
             await sleep(1000);
-            if (await isModalOpen()) { modalFound = true; break; }
-            if (!page.url().includes('login')) { captchaSolved = true; console.log('  [OK] Login succeeded!'); break; }
+            const isOpen = await isModalOpen();
+            if (isOpen) { modalFound = true; break; }
+            // Check if login succeeded (navigated away)
+            if (!page.url().includes('login')) {
+              captchaSolved = true;
+              console.log('  [OK] Navigated away - login succeeded!');
+              break;
+            }
           }
           if (captchaSolved) break;
           if (!modalFound) {
-            // WE closed the modal after wrong answer - need full page reload + re-login
-            console.log('    Modal closed - doing full page reload...');
-            await page.goto('https://my.te.eg/echannel/', { waitUntil: 'networkidle2', timeout: 30000 });
-            await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 15000 });
-            await sleep(3000);
-            // Re-enter credentials
-            await page.focus('#login_loginid_input_01');
-            await sleep(1000);
-            await page.type('#login_loginid_input_01', WE_USERNAME, { delay: 120 });
-            await sleep(2000);
-            // Re-select dropdown
-            const dropdown = await page.$('.ant-select-selector, .ant-select');
-            if (dropdown) {
-              await dropdown.click(); await sleep(1500);
-              await page.evaluate(() => {
-                const items = Array.from(document.querySelectorAll('.ant-select-item-option, .ant-select-item, li'));
-                const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
-                if (internet) internet.click();
-              });
-              await sleep(1000);
-            }
-            // Re-enter password
-            await page.focus('#login_password_input_01');
-            await sleep(1000);
-            await page.type('#login_password_input_01', WE_PASSWORD, { delay: 120 });
-            await sleep(2000);
-            // Re-submit
+            // Modal didn't appear - try clicking Login to trigger it
+            console.log('    Modal not found, re-clicking Login...');
             await page.evaluate(() => {
               const btns = Array.from(document.querySelectorAll('button'));
               const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
               if (btn) btn.click();
             });
-            await sleep(6000);
-            // Check for new captcha
+            await sleep(3000);
             const nowOpen = await isModalOpen();
             if (!nowOpen) {
               if (!page.url().includes('login')) { captchaSolved = true; break; }
-              console.log('    ! No captcha after reload, skipping round'); continue;
+              console.log('    ! Still no modal, skipping round');
+              continue;
             }
-            console.log('    New captcha appeared after reload!');
           }
-          await sleep(1000);
+          await sleep(1000); // Brief wait for new captcha image to load
         }
 
         try {
-<<<<<<< HEAD
           // Wait for valid captcha image (up to 8s)
           let imgHandle = null;
           for (let retry = 0; retry < 12; retry++) {
-=======
-          // Wait up to 15s for captcha image WITH LONGER RETRIES
-          let imgHandle = null;
-          for (let retry = 0; retry < 30; retry++) {
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
             imgHandle = await findCaptchaImg();
             const isValid = await page.evaluate(el => el && el.naturalWidth > 0, imgHandle).catch(() => false);
             if (isValid) break;
-            imgHandle = null; 
-            await sleep(500); // Check every 500ms instead of 1s
+            imgHandle = null;
+            await sleep(1000);
           }
-          if (!imgHandle) { 
-            console.log('    ! No valid captcha image after 15s');
-            // Dump modal HTML for debugging
-            const modalHtml = await page.evaluate(() => {
-              const m = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
-              return m ? m.innerHTML.slice(0, 500) : 'NO MODAL';
-            });
-            console.log('    [DEBUG] Modal HTML:', modalHtml);
-            continue; 
-          }
-<<<<<<< HEAD
           if (!imgHandle) { console.log('    ! No valid captcha image after 8s'); continue; }
 
           // Try each filter until we get a 5-char result
           let bestAnswer = '';
-=======
-
-          // STUDY: Process with all 13 filters
-          let allAnswers = [];
-          console.log('    [STUDY] Processing with all 13 filters...');
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
           for (const filter of FILTERS) {
             const b64 = await canvasProcess(imgHandle, filter);
             if (!b64) continue;
             const texts = await ocrRead(b64);
-<<<<<<< HEAD
             const match = texts.find(t => t.length >= 4 && t.length <= 6);
             console.log('    [' + filter + '] OCR:', JSON.stringify(texts), match ? '[OK]' : '[SKIP]');
             if (match) { bestAnswer = match; break; }
@@ -1210,42 +931,6 @@ async function harvestQuota() {
             console.log('  >>> CAPTCHA SOLVED on round', round, '! <<<');
           } else {
             console.log('    X Wrong answer "' + attempt + '", next round...');
-=======
-            for (const text of texts) if (text.length >= 4 && text.length <= 6) allAnswers.push({ filter, text });
-            if (texts.length > 0) console.log('      [' + filter + ']:', texts.join(', '));
-          }
-
-          if (allAnswers.length === 0) { console.log('    ! No candidates found'); continue; }
-
-          // CONSENSUS: Pick most frequent answer
-          const freq = {};
-          allAnswers.forEach(a => { const k = a.text; freq[k] = (freq[k]||0) + 1; });
-          // Also count case-insensitive groups
-          const freqLower = {};
-          allAnswers.forEach(a => { const k = a.text.toLowerCase(); freqLower[k] = (freqLower[k]||0) + 1; });
-          let bestLower = '', maxCount = 0;
-          for (const [ans, count] of Object.entries(freqLower)) {
-            console.log('      "' + ans + '" x' + count);
-            if (count > maxCount || (count === maxCount && ans.length === 5)) { maxCount = count; bestLower = ans; }
-          }
-          // Find the most common casing for this answer
-          const casings = allAnswers.filter(a => a.text.toLowerCase() === bestLower).map(a => a.text);
-          const casingFreq = {};
-          casings.forEach(c => { casingFreq[c] = (casingFreq[c]||0) + 1; });
-          const best = Object.entries(casingFreq).sort((a,b) => b[1]-a[1])[0][0];
-          console.log('    [CONSENSUS] Best: "' + best + '" (' + maxCount + ' votes)');
-
-          // Submit ONLY the consensus answer - WE allows very few attempts!
-          // Try: exact casing first, then UPPER, then lower
-          const variants = [...new Set([best, best.toUpperCase(), best.toLowerCase()])];
-          console.log('    [VARIANTS] Will try:', variants.join(', '));
-
-          for (const attempt of variants) {
-            console.log('    -> Trying:', attempt);
-            captchaSolved = await submitAnswer(attempt);
-            if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED with "' + attempt + '" on round', round, '! <<<'); break; }
-            else { console.log('    X Wrong: "' + attempt + '"'); await sleep(2000); if (!await isModalOpen()) break; }
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
           }
         } catch (e) {
           console.log('    ! Error:', e.message);
@@ -1268,7 +953,6 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     console.log('  ✓ Login successful!\n');
 
-<<<<<<< HEAD
     // Save session cookies for next run (avoids login entirely if session still valid)
     try {
       const cookies = await page.cookies();
@@ -1286,333 +970,6 @@ async function harvestQuota() {
     const data = await tryMethods([
       // M1: Walk ALL spans/divs, find ones whose text is ONLY a decimal number,
       // then check if a nearby sibling contains "Remaining" or "Used"
-=======
-    // Save full session after successful login
-    try {
-      const cookies = await page.cookies();
-      const relevantCookies = cookies.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
-      const storageData = await page.evaluate(() => {
-        const local = {}, session = {};
-        try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); local[k] = localStorage.getItem(k); } } catch(e) {}
-        try { for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); session[k] = sessionStorage.getItem(k); } } catch(e) {}
-        return { local, session };
-      });
-      if (relevantCookies.length > 0) {
-        await saveSession(relevantCookies, storageData.local, storageData.session);
-      }
-    } catch(e) { console.log('  [SESSION] Could not save session:', e.message); }
-
-    } // end if (!sessionValid)
-
-
-    // ══════════════════════════════════════
-    console.log('STEP 5.5: LINE SWITCHER (Dokki)');
-    // ══════════════════════════════════════
-    console.log('  Switching to line 0237600094...');
-
-    // CRITICAL: The WE portal does a session refresh after line switch that can
-    // redirect back to #/login within seconds. The only reliable approach is to
-    // extract the data THE MOMENT we confirm the correct page is showing —
-    // before the redirect can happen. We capture data inside the switcher itself.
-
-    // Helper: extract all quota data from the current page state
-    async function extractNow() {
-      const result = await page.evaluate(() => {
-        const spans = Array.from(document.querySelectorAll('span, div, p'));
-        let remaining = null, used = null, balance = null, plan = null;
-        function isNumericText(t) {
-          if (!t) return false;
-          const s = t.replace(/,/g, '').trim();
-          return /^\d+(\.\d+)?$/.test(s) && !s.startsWith('0237') && !s.startsWith('023');
-        }
-        for (let i = 0; i < spans.length; i++) {
-          const t = spans[i].innerText?.trim();
-          if (!t || t.length > 100) continue;
-          if (t === 'Remaining') {
-            for (let b = 1; b <= 3; b++) {
-              const c = spans[i-b]?.innerText?.trim();
-              if (isNumericText(c)) { remaining = c; break; }
-            }
-          }
-          if (t === 'Used') {
-            for (let b = 1; b <= 3; b++) {
-              const c = spans[i-b]?.innerText?.trim();
-              if (isNumericText(c)) { used = c; break; }
-            }
-          }
-          if (t === 'Current Balance') {
-            for (let f = 1; f <= 5; f++) {
-              const c = spans[i+f]?.innerText?.trim();
-              if (isNumericText(c)) { balance = c; break; }
-            }
-          }
-          if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
-        }
-        if (!remaining) {
-          // Fallback: regex on full page text
-          const text = document.body.innerText;
-          const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
-          const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
-          const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i) || text.match(/([\d,]+\.?\d+)\s*EGP/i);
-          const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
-          if (!r) return null;
-          return { remaining: r[1], used: u?.[1]||'0', balance: b?.[1]||'0', plan: p?.[0]?.trim()||'Unknown' };
-        }
-        return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
-      });
-      if (!result) return null;
-      const parsed = {
-        remaining: stripNum(result.remaining),
-        used: stripNum(result.used) || 0,
-        balance: stripNum(result.balance) || 0,
-        plan: result.plan
-      };
-      return (parsed.remaining || parsed.remaining === 0) ? parsed : null;
-    }
-
-    // Helper: check page is showing correct line with actual data
-    // IMPORTANT: checks the ACTIVE line widget (top-left "You are currently managing")
-    // NOT just text.includes() which can false-positive from hidden dropdown options
-    async function checkPage094() {
-      return await page.evaluate(() => {
-        // Method 1: Check the active line widget specifically
-        // The "You are currently managing" shows the ACTIVE line number
-        const activeEl = document.querySelector(
-          '#accountOverview_currentNumber, .ant-select-selection-item, [class*="currentNumber"], [class*="current-number"]'
-        );
-        const activeText = activeEl ? activeEl.innerText?.trim() : '';
-
-        // Method 2: Check the small line number display near "You are currently managing"
-        const managingEls = Array.from(document.querySelectorAll('span, div'));
-        let managingLine = '';
-        for (let i = 0; i < managingEls.length; i++) {
-          const t = managingEls[i].innerText?.trim();
-          if (t && t.includes('currently managing')) {
-            // The line number is usually in a nearby sibling or child
-            const nearby = managingEls[i+1]?.innerText?.trim() || managingEls[i+2]?.innerText?.trim() || '';
-            if (nearby.includes('023760009')) { managingLine = nearby; break; }
-            // Also check children
-            const child = managingEls[i].querySelector('[class*="number"], [class*="select"]');
-            if (child) { managingLine = child.innerText?.trim(); break; }
-          }
-        }
-
-        // Method 3: Look for 0237600094 specifically in small/label elements (not huge containers)
-        let foundIn094Widget = false;
-        for (const el of document.querySelectorAll('span, a, button, label, .ant-select-selection-item')) {
-          const t = el.innerText?.trim();
-          if (t && t.includes('0237600094') && t.length < 20) {
-            foundIn094Widget = true;
-            break;
-          }
-        }
-
-        const rem = document.body.innerText.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i)?.[1] || '';
-        const bal = document.body.innerText.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i)?.[1]
-                 || document.body.innerText.match(/([\d,]+\.?\d+)\s*EGP/i)?.[1] || '0';
-        const balNum = parseFloat(bal.replace(/,/g, '')) || 0;
-
-        // Line 0237600094 has balance > 3000 EGP (line 0237600093 has ~1923 EGP)
-        const isCorrectByBalance = balNum > 3000;
-
-        const has094 = activeText.includes('0237600094') || managingLine.includes('0237600094') || foundIn094Widget || isCorrectByBalance;
-
-        return {
-          has094,
-          activeText,
-          managingLine,
-          foundIn094Widget,
-          isCorrectByBalance,
-          balNum,
-          rem,
-          hasRemaining: !!rem
-        };
-      }).catch(() => ({ has094: false, activeText: '', managingLine: '', foundIn094Widget: false, isCorrectByBalance: false, balNum: 0, rem: '', hasRemaining: false }));
-    }
-
-    // The captured data from inside the switcher (avoids race condition)
-    let switcherCapturedData = null;
-
-    await tryMethods([
-      // M1: Click dropdown → select 0237600094 → capture data immediately on confirmation
-      async () => {
-        await page.waitForFunction(() => {
-          const t = document.body.innerText;
-          return t.includes('currently managing') || t.includes('Remaining');
-        }, { timeout: 15000 });
-        await sleep(1500);
-        console.log('    Pre-switch URL:', page.url());
-
-        // Open the line switcher dropdown
-        const dropdowns = await page.$$('.ant-select-selector, .ant-select');
-        if (!dropdowns.length) throw new Error('Dropdown not found');
-        await dropdowns[0].click();
-        await sleep(1500);
-
-        // Click 0237600094
-        const clicked = await page.evaluate(() => {
-          const opts = Array.from(document.querySelectorAll(
-            '.ant-select-item-option-content, .ant-select-item, li, option'
-          ));
-          const t = opts.find(o => o.textContent && o.textContent.includes('0237600094'));
-          if (t) { t.click(); return t.textContent.trim(); }
-          return null;
-        });
-        if (!clicked) throw new Error('Option 0237600094 not found');
-        console.log('    Clicked:', clicked);
-
-        // Poll aggressively — capture data THE MOMENT the page shows 0237600094 AND full data loaded
-        for (let w = 0; w < 30; w++) {
-          await sleep(1000);
-          const url = page.url();
-          const check = await checkPage094();
-
-          // If stuck on login after 5s, fail this method
-          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login after line switch');
-
-          // CRITICAL: Must satisfy ALL conditions for valid capture:
-          // 1. check.hasRemaining = true (data visible)
-          // 2. check.has094 = true (correct line showing)
-          // 3. balance > 3000 (line 94 has ~9856 EGP, line 93 has ~1923 EGP)
-          // 4. balance > 0 (data fully loaded, not still loading)
-          // 5. plan !== 'Unknown' (full page rendered)
-          // 6. remaining + used > 300 GB (line 94 = 750GB plan, line 93 = 250GB plan)
-          //    This catches mixed-state where balance updated but remaining/used still from line 93
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                switcherCapturedData = captured;
-                console.log('    ✓ M1 FULL DATA CAPTURED: remaining=' + captured.remaining + ' used=' + captured.used + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance + ' plan=' + captured.plan);
-                return; // SUCCESS
-              } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093), waiting for 094...');
-              } else if (captured.balance === 0) {
-                console.log('    ⏳ (' + (w+1) + 's) Balance=0, page still loading... rem=' + captured.remaining);
-              } else if (captured.plan === 'Unknown') {
-                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, page still rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
-              } else if (totalGB <= 300) {
-                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094✓) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) — waiting for full 094 data...');
-              } else {
-                console.log('    ⏳ (' + (w+1) + 's) Data incomplete, waiting... rem=' + captured.remaining + ' bal=' + captured.balance + ' total=' + totalGB.toFixed(1));
-              }
-            } else {
-              console.log('    ⏳ (' + (w+1) + 's) extractNow returned null, waiting...');
-            }
-          } else {
-            console.log('    ⏳ (' + (w+1) + 's) URL:' + url.split('#')[1] + ' | has094:' + check.has094 + ' | hasRem:' + check.hasRemaining + ' | bal:' + check.balNum);
-          }
-        }
-        throw new Error('M1: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 30s');
-      },
-
-      // M2: Broad evaluate click → same capture strategy
-      async () => {
-        await sleep(2000);
-        // Try all possible selectors for the dropdown
-        await page.evaluate(() => {
-          // Try ant-select first
-          const sel = document.querySelector('.ant-select-selector, .ant-select');
-          if (sel) sel.click();
-        });
-        await sleep(1500);
-        // Click target line
-        await page.evaluate(() => {
-          for (const el of document.querySelectorAll('div, li, option, span, a, .ant-select-item')) {
-            if (el.textContent && el.textContent.trim().includes('0237600094')) { el.click(); return; }
-          }
-        });
-        console.log('    Broad click done, waiting for page...');
-
-        // Same aggressive capture strategy with ALL verification criteria
-        for (let w = 0; w < 25; w++) {
-          await sleep(1000);
-          const url = page.url();
-          const check = await checkPage094();
-
-          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login');
-
-          // ALL 6 conditions must be true for valid capture
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                switcherCapturedData = captured;
-                console.log('    ✓ M2 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
-                return;
-              } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
-              } else if (captured.balance === 0) {
-                console.log('    ⏳ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
-              } else if (captured.plan === 'Unknown') {
-                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
-              } else if (totalGB <= 300) {
-                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '✓ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
-              }
-            }
-          } else {
-            console.log('    ⏳ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
-          }
-        }
-        throw new Error('M2: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
-      },
-
-      // M3: page.select() + capture
-      async () => {
-        await sleep(2000);
-        await page.select('select', '0237600094').catch(() => {});
-        for (let w = 0; w < 25; w++) {
-          await sleep(1000);
-          const url = page.url();
-          const check = await checkPage094();
-
-          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login');
-
-          // ALL 6 conditions must be true for valid capture
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                switcherCapturedData = captured;
-                console.log('    ✓ M3 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
-                return;
-              } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
-              } else if (captured.balance === 0) {
-                console.log('    ⏳ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
-              } else if (captured.plan === 'Unknown') {
-                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
-              } else if (totalGB <= 300) {
-                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '✓ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
-              }
-            }
-          } else {
-            console.log('    ⏳ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
-          }
-        }
-        throw new Error('M3: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
-      }
-    ], 'LINE SWITCHER', 45000);
-
-    console.log('  ✓ Switched to 0237600094 | captured data:', switcherCapturedData ? 'YES' : 'NO');
-    console.log('  Current URL:', page.url(), '\n');
-
-    // ══════════════════════════════════════
-    console.log('STEP 6: EXTRACT');
-    // ══════════════════════════════════════
-
-    // Use pre-captured data from switcher if available (avoids race condition with redirect)
-    // Only fall through to live extraction if switcher didn't capture data
-    const data = switcherCapturedData ? await (async () => {
-      console.log('  [FAST PATH] Using data captured during line switch (race-condition safe)');
-      console.log('    M1 numeric-only sibling scan');
-      return switcherCapturedData;
-    })() : await tryMethods([
-      // M1: Walk ALL spans/divs — numeric sibling scan
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       async () => {
         await sleep(2000);
         // Wait for balance card to load (extra wait if balance not yet visible)
@@ -1750,18 +1107,14 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     const now = new Date().toISOString();
     const fields = {
-      'dokki': { mapValue: { fields: {
+      '104': { mapValue: { fields: {
         quota:    { doubleValue: data.remaining },
         maxQuota: { doubleValue: data.remaining + data.used },
         balance:  { doubleValue: data.balance },
         used:     { doubleValue: data.used },
         plan:     { stringValue: data.plan },
         updatedAt: { stringValue: now },
-<<<<<<< HEAD
         updatedBy: { stringValue: 'GitHub Cloud ⚡' },
-=======
-        updatedBy: { stringValue: 'GitHub Cloud ⚡ Dokki' },
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
         status:   { stringValue: 'success' }
       }}},
       lastUpdate: { stringValue: now }
@@ -1798,17 +1151,13 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     const historyFields = {
       timestamp: { stringValue: now },
-<<<<<<< HEAD
       user: { stringValue: 'GitHub Cloud ⚡' },
-=======
-      user: { stringValue: 'GitHub Cloud ⚡ Dokki' },
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       notes: { stringValue: '' },
       dokki: { mapValue: { fields: {
         quota: { nullValue: null },
         balance: { nullValue: null }
       }}},
-      'dokki': { mapValue: { fields: {
+      '104': { mapValue: { fields: {
         quota: { doubleValue: data.remaining },
         balance: { doubleValue: data.balance }
       }}},
@@ -1840,13 +1189,8 @@ async function harvestQuota() {
     console.log('STEP 8.5: LOW QUOTA FLAG');
     // ══════════════════════════════════════
     // Write flag to Firestore quota_settings/alerts
-<<<<<<< HEAD
     // line104_low: true  → hourly workflow will run full harvest
     // line104_low: false → hourly workflow will skip (normal 2h schedule handles it)
-=======
-    // dokki_low: true  → hourly workflow will run full harvest
-    // dokki_low: false → hourly workflow will skip (normal 2h schedule handles it)
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
     try {
       const isLow104 = data.remaining < 100;
       const alertFields = {
@@ -1862,23 +1206,13 @@ async function harvestQuota() {
         body: JSON.stringify({ fields: alertFields })
       });
       if (alertRes.ok) {
-<<<<<<< HEAD
         console.log('  ✓ Low quota flag set: line104_low=' + isLow104 + ' (' + data.remaining.toFixed(1) + ' GB)\n');
-=======
-        console.log('  ✓ Low quota flag set: dokki_low=' + isLowDokki + ' (' + data.remaining.toFixed(1) + ' GB)\n');
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       } else {
         console.log('  ⚠ Flag write failed (non-critical): HTTP ' + alertRes.status);
       }
     } catch(e) {
       console.log('  ⚠ Flag write error (non-critical):', e.message);
-<<<<<<< HEAD
     }    // ══════════════════════════════════════
-=======
-    }
-
-    // ══════════════════════════════════════
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
     console.log('STEP 9: TELEGRAM');
     // ══════════════════════════════════════
     try {
@@ -1906,11 +1240,7 @@ async function harvestQuota() {
         `💰 Balance: *${data.balance.toFixed(2)} EGP*`,
         `📋 Plan: ${data.plan}`,
         `🕐 ${date}`,
-<<<<<<< HEAD
         `🤖 GitHub Cloud ⚡` + alertLine
-=======
-        `🤖 GitHub Cloud ⚡ Dokki` + alertLine
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       ].join('\n');
 
       const tgUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
@@ -1934,10 +1264,7 @@ async function harvestQuota() {
       console.log('  ✓ Telegram sent!\n');
 
       // CRITICAL ALERT: Under 30 GB — send a separate urgent message
-<<<<<<< HEAD
       // This triggers a second notification/ringtone on the phone
-=======
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       if (rem < 30) {
         const criticalMsg = {
           text: ['🚨🚨🚨 *CRITICAL QUOTA ALERT* 🚨🚨🚨', '', '⚠️ *Cairo Taj — Dokki*',
@@ -1960,7 +1287,6 @@ async function harvestQuota() {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('✅ ✅ ✅  SUCCESS  ✅ ✅ ✅');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-<<<<<<< HEAD
 
     // ══════════════════════════════════════════════════════════════
     // VIGILANCE MODE — triggered when quota ≤ 50 GB
@@ -2047,7 +1373,7 @@ async function harvestQuota() {
       async function vigilanceFirestore(vData) {
         const vNow = new Date().toISOString();
         const vFields = {
-          'dokki': { mapValue: { fields: {
+          '104': { mapValue: { fields: {
             quota:     { doubleValue: vData.remaining },
             maxQuota:  { doubleValue: vData.remaining + vData.used },
             balance:   { doubleValue: vData.balance },
@@ -2070,7 +1396,7 @@ async function harvestQuota() {
           user: { stringValue: 'GitHub Cloud ⚡ [VIGILANCE]' },
           notes: { stringValue: 'vigilance-mode' },
           dokki: { mapValue: { fields: { quota: { nullValue: null }, balance: { nullValue: null } } } },
-          'dokki': { mapValue: { fields: { quota: { doubleValue: vData.remaining }, balance: { doubleValue: vData.balance } } } },
+          '104': { mapValue: { fields: { quota: { doubleValue: vData.remaining }, balance: { doubleValue: vData.balance } } } },
           gezira: { mapValue: { fields: { quota: { nullValue: null }, balance: { nullValue: null } } } }
         };
         const hUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_history?key=${FIREBASE_API_KEY}`;
@@ -2203,7 +1529,7 @@ async function harvestQuota() {
         // Username
         await page.focus('#login_loginid_input_01').catch(() => {});
         await sleep(2000);
-        await page.type('#login_loginid_input_01', DOKKI_USERNAME, { delay: randomDelay(100, 180) });
+        await page.type('#login_loginid_input_01', WE_USERNAME, { delay: randomDelay(100, 180) });
         await sleep(randomDelay(4000, 6000));
         // Dropdown
         await page.waitForFunction(() => !!document.querySelector('.ant-select-selector, .ant-select'), { timeout: 12000 }).catch(() => {});
@@ -2219,7 +1545,7 @@ async function harvestQuota() {
         // Password
         await page.focus('#login_password_input_01').catch(() => {});
         await sleep(2000);
-        await page.type('#login_password_input_01', DOKKI_PASSWORD, { delay: randomDelay(100, 180) });
+        await page.type('#login_password_input_01', WE_PASSWORD, { delay: randomDelay(100, 180) });
         await sleep(randomDelay(4000, 6000));
         // Submit
         await page.evaluate(() => {
@@ -2318,8 +1644,6 @@ async function harvestQuota() {
 
       console.log('\n[VIGILANCE] Exiting vigilance mode after ' + vigilanceRound + ' rounds.');
     } // end vigilance mode
-=======
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
 
   } catch (error) {
     console.error('\n❌ ERROR:', error.message);
@@ -2346,75 +1670,20 @@ async function main() {
     try {
       console.log(`\n${'═'.repeat(50)}\nATTEMPT ${attempt}/${MAX_RETRIES}\n${'═'.repeat(50)}\n`);
       await harvestQuota();
-<<<<<<< HEAD
       console.log('\n🎉 COMPLETE!');
       process.exit(0);
     } catch (error) {
       console.error(`\nAttempt ${attempt} failed: ${error.message}`);
-=======
-      console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n✅ ✅ ✅  SUCCESS  ✅ ✅ ✅\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🎉 COMPLETE!');
-      process.exit(0);
-    } catch (error) {
-      console.error(`\nAttempt ${attempt} failed: ${error.message}`);
-      
-      // Screenshot on error for debugging
-      if (error.screenshot) {
-        console.log(`Screenshot length: ${error.screenshot.length}`);
-      }
-      
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       // If WE blocked us, don't retry — it will make things worse
       if (error.message && error.message.includes('WE_BLOCKED')) {
         console.error('⛔ WE block detected — stopping all retries to avoid extending the block period');
         console.error('💀 Will retry on next scheduled run automatically');
-<<<<<<< HEAD
         process.exit(1);
       }
       if (attempt < MAX_RETRIES) {
         const d = randomDelay(30000, 45000);
         console.log(`Retrying in ${Math.floor(d/1000)}s...`);
         await sleep(d);
-=======
-        
-        // Send Telegram alert for WE block
-        try {
-          const msg = `🚨 Dokki BLOCKED by WE\n\nWE has temporarily blocked this account/IP.\nWill auto-retry in 2 hours.\n\nTime: ${new Date().toLocaleString('en-US', {timeZone: 'Africa/Cairo'})} Cairo`;
-          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: msg })
-          });
-        } catch (e) { console.error('Could not send Telegram alert:', e.message); }
-        
-        process.exit(1);
-      }
-      
-      // Check if this is a credentials issue
-      if (error.message && (error.message.includes('Still on login page') || error.message.includes('navigation or captcha'))) {
-        console.error('⚠️  Login issue detected - credentials may be wrong or account locked');
-        
-        // Only send alert on last attempt to avoid spam
-        if (attempt === MAX_RETRIES) {
-          try {
-            const msg = `⚠️ Dokki Login Failed (All ${MAX_RETRIES} Attempts)\n\nIssue: ${error.message}\n\nCheck GitHub Actions logs for details.\n\nTime: ${new Date().toLocaleString('en-US', {timeZone: 'Africa/Cairo'})} Cairo`;
-            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: msg })
-            });
-          } catch (e) { console.error('Could not send Telegram alert:', e.message); }
-        }
-      }
-      
-      if (attempt < MAX_RETRIES) {
-        // Smart backoff: progressive delay to avoid rate limiting
-        // Attempt 1: 30-45s, Attempt 2: 45-60s, Attempt 3: 60-75s, etc.
-        const baseDelay = 30000 + ((attempt - 1) * 15000);
-        const variance = 15000;
-        const delay = baseDelay + Math.floor(Math.random() * variance);
-        console.log(`Retrying in ${Math.floor(delay/1000)}s... (smart backoff)`);
-        await sleep(delay);
->>>>>>> 259761ed27d2d4123aeb2ffcd6413c6ce7ad3908
       } else {
         console.error('\n💀 ALL ATTEMPTS FAILED');
         process.exit(1);
