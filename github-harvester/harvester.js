@@ -1,4 +1,4 @@
-﻿const puppeteer = require('puppeteer-extra');
+const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fetch = require('node-fetch');
 
@@ -99,9 +99,9 @@ async function harvestQuota() {
       const cookieStr = doc?.fields?.cookies?.stringValue;
       const savedAt = doc?.fields?.savedAt?.stringValue;
       if (!cookieStr || !savedAt) return null;
-      // Only use cookies saved within last 4 hours
+      // Only use cookies saved within last 8 hours (WE sessions last long)
       const age = Date.now() - new Date(savedAt).getTime();
-      if (age > 4 * 60 * 60 * 1000) { console.log('  [SESSION] Cookies expired (>4h old), will do fresh login'); return null; }
+      if (age > 8 * 60 * 60 * 1000) { console.log('  [SESSION] Cookies expired (>8h old), will do fresh login'); return null; }
       console.log('  [SESSION] Found saved cookies (' + Math.floor(age/60000) + 'm old)');
       return JSON.parse(cookieStr);
     } catch(e) { console.log('  [SESSION] Could not load cookies:', e.message); return null; }
@@ -189,20 +189,44 @@ async function harvestQuota() {
       try {
         console.log('  Trying saved session cookies...');
         await page.setCookie(...savedCookies);
-        await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
-        await sleep(3000);
-        const url = page.url();
-        const isLoggedIn = !url.includes('login') && url.includes('account');
+        
+        // ROBUST SESSION CHECK - try multiple approaches
+        // Approach 1: Go to login page first, let auto-redirect work
+        await page.goto('https://my.te.eg/echannel/#/login', { waitUntil: 'networkidle2', timeout: 25000 });
+        await sleep(5000); // Cloud is slow - give it time to auto-redirect
+        
+        let url = page.url();
+        console.log('  After login page visit, URL:', url);
+        
+        // If still on login, try direct navigation to account
+        if (url.includes('login')) {
+          console.log('  Still on login, trying direct navigation to account...');
+          await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'domcontentloaded', timeout: 25000 });
+          await sleep(6000); // Extra wait for cloud
+          url = page.url();
+          console.log('  After account page visit, URL:', url);
+        }
+        
+        // Final check - on account page AND data visible
+        const isLoggedIn = await page.evaluate(() => {
+          const url = window.location.href;
+          const onAccountPage = !url.includes('login') && url.includes('account');
+          const hasData = document.body.innerText.includes('Remaining') || 
+                         document.body.innerText.includes('Balance') ||
+                         document.body.innerText.includes('currently managing');
+          return onAccountPage && hasData;
+        });
+        
         if (isLoggedIn) {
           sessionValid = true;
           console.log('  ✓ Session still valid! Skipping login entirely.\n');
         } else {
-          console.log('  ✗ Session expired, clearing and doing fresh login');
-          await clearCookies();
+          console.log('  ✗ Session expired or invalid, will do fresh login');
+          console.log('  [INFO] Not clearing cookies - might work next time');
         }
       } catch(e) {
         console.log('  ✗ Session check failed:', e.message);
-        await clearCookies();
+        console.log('  [INFO] Will attempt fresh login');
       }
     } else {
       console.log('  No saved session, will do fresh login\n');
@@ -559,11 +583,17 @@ async function harvestQuota() {
     // ======================================
     await tryMethods([
       async () => {
-        await page.evaluate(() => {
+        const clicked = await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button'));
           const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) btn.click();
+          if (btn) {
+            console.log('[SUBMIT] Found button:', btn.textContent.trim(), 'disabled:', btn.disabled);
+            btn.click();
+            return { found: true, text: btn.textContent.trim(), disabled: btn.disabled };
+          }
+          return { found: false };
         });
+        console.log('    [SUBMIT] Button click result:', JSON.stringify(clicked));
         await sleep(6000);
         console.log('    local harvester method');
       },
@@ -591,7 +621,8 @@ async function harvestQuota() {
     ], 'SUBMIT', 20000);
 
     // ======================================
-    // POST-SUBMIT: Race - URL change vs captcha modal vs block
+    // ======================================
+    // POST-SUBMIT: Race - URL change vs captcha modal vs T&C vs block
     // ======================================
     console.log('  Waiting for login result...');
     let postLoginState = 'unknown';
@@ -602,23 +633,38 @@ async function harvestQuota() {
         console.log('  [OK] URL changed to:', currentUrl);
         break;
       }
-      // Check for captcha OR block message
       const pageState = await page.evaluate(() => {
-        const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
-        const hasCaptcha = !!modal || text.includes('verification') || text.includes('enter code');
-        // Detect WE block messages
+        const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
+        // T&C modal: WE shows terms after first login from new IP
+        const hasTnC = !!modal && (text.includes('terms') || text.includes('conditions') ||
+                       text.includes('الشروط') || text.includes('موافق') ||
+                       text.includes('accept') || text.includes('agree'));
+        const hasCaptcha = (!!modal && !hasTnC) || text.includes('verification') || text.includes('enter code');
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
-                          text.includes('exceeded') || text.includes('try again') ||
+                          text.includes('exceeded') ||
                           text.includes('blocked') || text.includes('محاولات') ||
                           text.includes('الحد الاقصى') || text.includes('مره اخرى');
-        return { hasCaptcha, isBlocked, text: text.slice(0, 200) };
+        // Real form validation errors (red text under fields - NOT dropdown options)
+        const formErrors = Array.from(document.querySelectorAll(
+          '.ant-form-item-explain-error, .ant-form-item-has-error .ant-form-item-explain'
+        ));
+        const formErrorTexts = formErrors.map(function(e) { return e.innerText && e.innerText.trim(); }).filter(function(t) { return t && t.length > 0; });
+        const hasFormError = formErrorTexts.length > 0;
+        const submitBtn = document.querySelector('button[type="submit"], button.ant-btn-primary');
+        const btnLoading = submitBtn ? (submitBtn.className.includes('loading') || submitBtn.disabled) : false;
+        return { hasCaptcha: hasCaptcha, hasTnC: hasTnC, isBlocked: isBlocked, hasFormError: hasFormError, formErrorTexts: formErrorTexts, btnLoading: btnLoading, text: text.slice(0, 300) };
       });
 
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
-        console.log('  [BLOCKED] WE has blocked this IP/account temporarily');
-        console.log('  [BLOCKED] Page text:', pageState.text.slice(0, 150));
+        console.log('  [BLOCKED] WE blocked this IP/account');
+        console.log('  [BLOCKED] Text:', pageState.text.slice(0, 150));
+        break;
+      }
+      if (pageState.hasTnC) {
+        postLoginState = 'tnc';
+        console.log('  [T&C] Terms and Conditions modal detected - will accept');
         break;
       }
       if (pageState.hasCaptcha) {
@@ -626,11 +672,46 @@ async function harvestQuota() {
         console.log('  [CAPTCHA] Modal detected at', tick + 1, 'seconds');
         break;
       }
+      if (pageState.hasFormError) {
+        console.log('  [FORM-ERROR] Validation errors:', JSON.stringify(pageState.formErrorTexts));
+        postLoginState = 'formerror';
+        break;
+      }
+      if (tick === 3 || tick === 8 || tick === 15) {
+        console.log('  [DEBUG] Tick', tick + 1, 's - still on login, btn loading:', pageState.btnLoading);
+        console.log('  [DEBUG] Page text:', pageState.text.slice(0, 200));
+      }
       if (tick % 3 === 0) console.log('  Waiting...', tick + 1, 's');
       await sleep(1000);
     }
 
-    if (postLoginState === 'blocked' || postLoginState === 'unknown') {
+    // Handle T&C - accept and continue
+    if (postLoginState === 'tnc') {
+      console.log('  [T&C] Accepting Terms and Conditions...');
+      await page.evaluate(function() {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const btn = btns.find(function(b) { return /accept|agree|ok|confirm|موافق/i.test(b.textContent); }) ||
+                    document.querySelector('button.ant-btn-primary');
+        if (btn) { console.log('[T&C] Clicking:', btn.textContent.trim()); btn.click(); }
+      });
+      await sleep(4000);
+      const urlAfterTnC = page.url();
+      if (!urlAfterTnC.includes('login')) {
+        postLoginState = 'navigated';
+        console.log('  [T&C] Accepted! Now at:', urlAfterTnC);
+      } else {
+        const modal2 = await page.evaluate(function() { return !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]'); });
+        if (modal2) { postLoginState = 'captcha'; console.log('  [T&C] Captcha appeared after T&C accept'); }
+        else { postLoginState = 'unknown'; }
+      }
+    }
+
+    // Handle form validation error
+    if (postLoginState === 'formerror') {
+      throw new Error('Login form validation failed - check credentials or field format');
+    }
+
+if (postLoginState === 'blocked' || postLoginState === 'unknown') {
       await clearCookies();
       if (_torRetryCount < 2) {
         _torRetryCount++;
@@ -705,12 +786,13 @@ async function harvestQuota() {
     }
 
     // ======================================
-    // CAPTCHA ENGINE v4 (only if captcha was detected)
+    // ======================================
+    // CAPTCHA ENGINE ULTIMATE
+    // 18 filters | colorOnly=2x | 5 colorOnly-style | consensus | 4 PSM | node-fetch
     // ======================================
     if (postLoginState === 'captcha') {
-      console.log('  [CAPTCHA] Ultimate Engine v4 starting...\n');
+      console.log('  [CAPTCHA] ULTIMATE Engine - 18 filters + colorOnly 2x + consensus + 4 PSM\n');
 
-      // HELPER: Find the captcha image (largest img inside modal)
       async function findCaptchaImg() {
         return await page.evaluateHandle(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
@@ -722,162 +804,195 @@ async function harvestQuota() {
           });
           for (const img of imgs) {
             const r = img.getBoundingClientRect();
-            if (r.width > 80 && r.height > 25) return img; // naturalWidth removed - always 0 on datacenter IPs
+            if (r.width > 80 && r.height > 25) return img;
           }
           return null;
         });
       }
 
-      // HELPER: Canvas preprocessing - 10 extreme filters for WE captcha
-      // WE captcha: mixed case+digits, dot noise bg, blue diagonal line
+      async function fetchCaptchaBase64() {
+        try {
+          const imgSrc = await page.evaluate(() => {
+            const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
+            if (!modal) return null;
+            const imgs = Array.from(modal.querySelectorAll('img')).sort((a, b) => {
+              const aR = a.getBoundingClientRect(), bR = b.getBoundingClientRect();
+              return (bR.width * bR.height) - (aR.width * aR.height);
+            });
+            for (const img of imgs) {
+              const r = img.getBoundingClientRect();
+              if (r.width > 80 && r.height > 25) return img.src || img.getAttribute('src');
+            }
+            return imgs[0] ? imgs[0].src : null;
+          });
+          if (!imgSrc) { console.log('    [FETCH] No img src in modal'); return null; }
+          if (imgSrc.startsWith('data:image')) return imgSrc;
+          console.log('    [FETCH] URL:', imgSrc.slice(0, 80));
+          try {
+            const pageCookies = await page.cookies();
+            const cookieStr = pageCookies.map(c => c.name + '=' + c.value).join('; ');
+            const nodeFetch = require('node-fetch');
+            const resp = await nodeFetch(imgSrc, {
+              headers: { 'Cookie': cookieStr, 'Referer': 'https://my.te.eg/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8' }, timeout: 10000
+            });
+            if (resp.ok) {
+              const buf = await resp.buffer();
+              if (buf.length > 100) { console.log('    [FETCH] Node-side OK, bytes:', buf.length); return 'data:image/png;base64,' + buf.toString('base64'); }
+            }
+          } catch(nodeErr) { console.log('    [FETCH] Node-side err:', nodeErr.message); }
+          const b64xhr = await page.evaluate(async (url) => new Promise(resolve => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true); xhr.responseType = 'blob';
+            xhr.onload = () => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(xhr.response); };
+            xhr.onerror = xhr.ontimeout = () => resolve(null);
+            xhr.timeout = 8000; xhr.send();
+          }), imgSrc);
+          if (b64xhr) { console.log('    [FETCH] XHR fallback OK'); return b64xhr; }
+          return null;
+        } catch(e) { console.log('    [FETCH] err:', e.message); return null; }
+      }
+
       async function canvasProcess(imgHandle, filter) {
         return await page.evaluate((imgEl, f) => {
           if (!imgEl || !imgEl.naturalWidth) return null;
           const scale = 3;
           const c = document.createElement('canvas');
-          c.width = imgEl.naturalWidth * scale; c.height = imgEl.naturalHeight * scale;
-          const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+          c.width = imgEl.naturalWidth * scale;
+          c.height = imgEl.naturalHeight * scale;
+          const ctx = c.getContext('2d');
+          ctx.imageSmoothingEnabled = false;
           ctx.drawImage(imgEl, 0, 0, c.width, c.height);
-          const data = ctx.getImageData(0, 0, c.width, c.height); const d = data.data;
+          const data = ctx.getImageData(0, 0, c.width, c.height);
+          const d = data.data;
           for (let i = 0; i < d.length; i += 4) {
-            const r=d[i],g=d[i+1],b=d[i+2];
-            const lum=0.299*r+0.587*g+0.114*b;
-            const sat=Math.max(r,g,b)===0?0:(Math.max(r,g,b)-Math.min(r,g,b))/Math.max(r,g,b);
-            let keep=false;
-            if      (f==='dark')      keep=lum<128;
-            else if (f==='dark2')     keep=lum<150;
-            else if (f==='dark3')     keep=lum<170;
-            else if (f==='nodots')    keep=lum<115&&sat<0.5;
-            else if (f==='noline')    keep=lum<128&&!(b>r+30&&b>g+20);
-            else if (f==='nolineAgg') keep=lum<140&&!(b>r+15&&b>g+10);
-            else if (f==='red')       keep=r>90&&(r-g)>25&&(r-b)>15;
-            else if (f==='color')     keep=sat>0.2&&lum<210;
-            else if (f==='t110')      keep=lum<110;
-            else if (f==='inv')       keep=(255-lum)<128;
-            d[i]=d[i+1]=d[i+2]=keep?0:255; d[i+3]=255;
+            const r = d[i], g = d[i+1], b = d[i+2];
+            const lum = 0.299*r + 0.587*g + 0.114*b;
+            const max = Math.max(r,g,b), min = Math.min(r,g,b);
+            const sat = max === 0 ? 0 : (max - min) / max;
+            let hue = 0;
+            if (max !== min) {
+              const d2 = max - min;
+              if (max === r) hue = ((g - b) / d2 + (g < b ? 6 : 0)) * 60;
+              else if (max === g) hue = ((b - r) / d2 + 2) * 60;
+              else hue = ((r - g) / d2 + 4) * 60;
+            }
+            const isBlue = b > r + 25 && b > g + 15 && sat > 0.2;
+            const isWhiteNoise = sat < 0.12 && lum > 160;
+            let keep = false;
+            if (isBlue || isWhiteNoise) { keep = false; }
+            else if (f === 'colorOnly')      { keep = sat > 0.25 && lum < 195 && lum > 20; }
+            else if (f === 'colorDeep')      { keep = sat > 0.38 && lum < 190 && lum > 15; }
+            else if (f === 'colorBroad')     { keep = sat > 0.15 && lum < 215 && lum > 10; }
+            else if (f === 'colorMid')       { keep = sat > 0.22 && lum < 200 && lum > 20 && !(b > r + 10 && b > g + 8); }
+            else if (f === 'colorPure')      { keep = sat > 0.50 && lum < 185 && lum > 25; }
+            else if (f === 'colorHue')       { keep = sat > 0.25 && lum < 200 && !(hue > 195 && hue < 255); }
+            else if (f === 'warmColors')     { keep = r > g && r > b && sat > 0.22 && lum < 200; }
+            else if (f === 'channelDivide')  { keep = (r / (b + 1)) > 1.45 && lum < 185; }
+            else if (f === 'blueInverter')   { const bi = 255 - b; keep = (r * 0.6 + bi * 0.4) > 130 && sat > 0.18; }
+            else if (f === 'greenSuppress')  { keep = r > g + 15 && sat > 0.2 && lum < 190; }
+            else if (f === 'redBlueBalance') { keep = (r + b) > g * 2.2 && sat > 0.22 && lum < 190; }
+            else if (f === 'darkColor')      { keep = lum < 145 && sat > 0.18; }
+            else if (f === 'thresh110Color') { keep = lum < 110 && sat > 0.08; }
+            else if (f === 'thresh150Color') { keep = lum < 150 && sat > 0.12; }
+            else if (f === 'satStrict')      { keep = sat > 0.48 && lum < 192 && lum > 28; }
+            else if (f === 'hueSplit')       { keep = (hue < 80 || hue > 275) && sat > 0.2 && lum < 200; }
+            else if (f === 'dilateColor')    { keep = lum < 175 && sat > 0.12 && (r < 155 || g < 155); }
+            else if (f === 'adaptiveColor')  { const maxDiff = Math.max(Math.abs(r-g), Math.abs(r-b), Math.abs(g-b)); keep = maxDiff > 35 && lum < 210 && lum > 12; }
+            d[i] = d[i+1] = d[i+2] = keep ? 0 : 255;
+            d[i+3] = 255;
           }
-          ctx.putImageData(data,0,0);
+          ctx.putImageData(data, 0, 0);
           return c.toDataURL('image/png');
         }, imgHandle, filter);
       }
 
-            // HELPER: OCR with dual PSM modes
       async function ocrRead(imageData) {
         const Tesseract = require('tesseract.js');
         const results = [];
-        const r1 = await Tesseract.recognize(imageData, 'eng', {
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
-          tessedit_pageseg_mode: '8'
-        });
-        const t1 = r1.data.text.replace(/[^A-Za-z0-9]/g, '').trim();
-        if (t1) results.push(t1);
-        if (t1.length !== 5) {
-          const r2 = await Tesseract.recognize(imageData, 'eng', {
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
-            tessedit_pageseg_mode: '7'
-          });
-          const t2 = r2.data.text.replace(/[^A-Za-z0-9]/g, '').trim();
-          if (t2 && t2 !== t1) results.push(t2);
+        const seen = new Set();
+        const whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        for (const psm of ['8', '7', '13', '6']) {
+          try {
+            const r = await Tesseract.recognize(imageData, 'eng', {
+              tessedit_char_whitelist: whitelist,
+              tessedit_pageseg_mode: psm,
+              preserve_interword_spaces: '0'
+            });
+            const t = r.data.text.replace(/[^A-Za-z0-9]/g, '').trim();
+            if (t && !seen.has(t)) { seen.add(t); results.push(t); }
+          } catch(e) {}
         }
         return results;
       }
 
-      // HELPER: Submit captcha answer into modal input
       async function submitAnswer(answer) {
         console.log('    -> Submitting:', answer);
         const ok = await page.evaluate((ans) => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
           if (!modal) return false;
-          const inp = modal.querySelector('input.ant-input, input[type="text"]');
+          const inp = modal.querySelector('input.ant-input, input[type="text"], input');
           if (!inp) return false;
-          inp.focus();
-          inp.click();
+          inp.focus(); inp.click();
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          setter.call(inp, '');
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-          setter.call(inp, ans);
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          setter.call(inp, ''); inp.dispatchEvent(new Event('input', { bubbles: true }));
+          setter.call(inp, ans); inp.dispatchEvent(new Event('input', { bubbles: true }));
           inp.dispatchEvent(new Event('change', { bubbles: true }));
-          // Find the OK/confirm button — NOT Cancel. Look for button with ok/confirm text,
-          // or ant-btn-primary class, or the LAST button (Cancel is usually first, Ok is last)
+          inp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+          inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
           const allBtns = Array.from(modal.querySelectorAll('button'));
-          const btn = allBtns.find(b => /ok|confirm|submit/i.test(b.textContent)) ||
+          const btn = allBtns.find(b => /ok|confirm|submit|verify/i.test(b.textContent)) ||
                       modal.querySelector('button.ant-btn-primary') ||
-                      allBtns[allBtns.length - 1]; // last button = OK
-          console.log('[captcha] Clicking button:', btn ? btn.textContent.trim() : 'none', 'of', allBtns.length, 'buttons');
+                      allBtns[allBtns.length - 1];
+          console.log('[captcha] Clicking:', btn ? btn.textContent.trim() : 'none', '/', allBtns.length, 'btns');
           if (btn) btn.click();
           return true;
         }, answer);
         if (!ok) {
           console.log('    -> Keyboard fallback');
-          await page.keyboard.press('Tab');
-          await sleep(200);
-          await page.keyboard.type(answer, { delay: 40 });
-          await sleep(300);
-          await page.keyboard.press('Enter');
+          await page.keyboard.press('Tab'); await sleep(300);
+          await page.keyboard.type(answer, { delay: 60 });
+          await sleep(500); await page.keyboard.press('Enter');
         }
-        await sleep(5000);
+        for (let w = 0; w < 8; w++) {
+          await sleep(1000);
+          if (!page.url().includes('login')) return true;
+          const stillOpen = await page.evaluate(() =>
+            !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]')
+          );
+          if (!stillOpen) { await sleep(2000); return !page.url().includes('login'); }
+        }
         return !page.url().includes('login');
       }
 
-      // HELPER: Check if modal is still open
       async function isModalOpen() {
-        return await page.evaluate(() => {
-          const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
-          return !!modal;
-        });
+        return await page.evaluate(() =>
+          !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]')
+        );
       }
 
-      // HELPER: Re-trigger captcha by clicking Login again
-      async function retriggerLogin() {
-        console.log('    -> Modal closed, re-clicking Login...');
-        await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button'));
-          const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) btn.click();
-        });
-        // Wait for captcha modal to reappear
-        for (let w = 0; w < 15; w++) {
-          await sleep(1000);
-          const hasModal = await page.evaluate(() => {
-            const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
-            return !!modal;
-          });
-          if (hasModal) {
-            console.log('    -> New captcha modal appeared');
-            await sleep(2000);
-            return true;
-          }
-          // Check if we navigated away (login succeeded without captcha this time)
-          if (!page.url().includes('login')) return false;
-        }
-        return false;
-      }
-
-      // MAIN CAPTCHA LOOP (6 rounds — enough to solve, avoids IP block from too many attempts)
-      const FILTERS = ['dark','dark2','dark3','nodots','noline','nolineAgg','red','color','t110','inv'];
+      const FILTERS = [
+        'colorOnly','colorDeep','colorBroad','colorMid','colorPure','colorHue',
+        'warmColors','channelDivide','blueInverter','greenSuppress','redBlueBalance',
+        'darkColor','thresh110Color','thresh150Color','satStrict',
+        'hueSplit','dilateColor','adaptiveColor'
+      ];
+      const COLOR_A = ['colorOnly','colorDeep','colorBroad','colorMid','colorPure','colorHue'];
       let captchaSolved = false;
 
-      for (let round = 1; round <= 6 && !captchaSolved; round++) {
+      for (let round = 1; round <= 12 && !captchaSolved; round++) {
         console.log('  -- Round', round, '/ 12 --');
 
-        // Wait for captcha modal to be present (it appears automatically after wrong answer)
         if (round > 1) {
           let modalFound = false;
           for (let w = 0; w < 10; w++) {
             await sleep(1000);
-            const isOpen = await isModalOpen();
-            if (isOpen) { modalFound = true; break; }
-            // Check if login succeeded (navigated away)
-            if (!page.url().includes('login')) {
-              captchaSolved = true;
-              console.log('  [OK] Navigated away - login succeeded!');
-              break;
-            }
+            if (await isModalOpen()) { modalFound = true; break; }
+            if (!page.url().includes('login')) { captchaSolved = true; console.log('  [OK] Login succeeded!'); break; }
           }
           if (captchaSolved) break;
           if (!modalFound) {
-            // Modal didn't appear - try clicking Login to trigger it
             console.log('    Modal not found, re-clicking Login...');
             await page.evaluate(() => {
               const btns = Array.from(document.querySelectorAll('button'));
@@ -885,62 +1000,81 @@ async function harvestQuota() {
               if (btn) btn.click();
             });
             await sleep(3000);
-            const nowOpen = await isModalOpen();
-            if (!nowOpen) {
+            if (!await isModalOpen()) {
               if (!page.url().includes('login')) { captchaSolved = true; break; }
-              console.log('    ! Still no modal, skipping round');
-              continue;
+              console.log('    ! Still no modal, skipping round'); continue;
             }
           }
-          await sleep(1000); // Brief wait for new captcha image to load
+          await sleep(1000);
         }
 
         try {
-          // Wait for valid captcha image (up to 8s)
+          let imageData = null;
+          for (let retry = 0; retry < 4; retry++) {
+            imageData = await fetchCaptchaBase64();
+            if (imageData) { console.log('    [IMG] Node-fetch OK, len:', imageData.length); break; }
+            await sleep(1500);
+          }
           let imgHandle = null;
-          for (let retry = 0; retry < 12; retry++) {
+          for (let retry = 0; retry < 6; retry++) {
             imgHandle = await findCaptchaImg();
             const isValid = await page.evaluate(el => el && el.naturalWidth > 0, imgHandle).catch(() => false);
             if (isValid) break;
             imgHandle = null;
             await sleep(1000);
           }
-          if (!imgHandle) { console.log('    ! No valid captcha image after 8s'); continue; }
+          if (!imageData && !imgHandle) { console.log('    ! No captcha image found'); continue; }
 
-          // Try each filter until we get a 5-char result
-          let bestAnswer = '';
-          for (const filter of FILTERS) {
-            const b64 = await canvasProcess(imgHandle, filter);
-            if (!b64) continue;
-            const texts = await ocrRead(b64);
-            const match = texts.find(t => t.length >= 4 && t.length <= 6);
-            console.log('    [' + filter + '] OCR:', JSON.stringify(texts), match ? '[OK]' : '[SKIP]');
-            if (match) { bestAnswer = match; break; }
+          const candidates = new Map();
+          const addCandidate = (t, score) => {
+            if (!t || t.length < 4 || t.length > 7) return;
+            const key = t.toLowerCase();
+            const existing = [...candidates.keys()].find(k => k.toLowerCase() === key);
+            const useKey = existing || t;
+            candidates.set(useKey, (candidates.get(useKey) || 0) + score);
+          };
+
+          if (imgHandle) {
+            for (const filter of FILTERS) {
+              const b64 = await canvasProcess(imgHandle, filter);
+              if (!b64) continue;
+              const texts = await ocrRead(b64);
+              const weight = filter === 'colorOnly' ? 2 : COLOR_A.includes(filter) ? 1.5 : 1;
+              console.log('    [' + filter + '] OCR:', JSON.stringify(texts), weight > 1 ? '(' + weight + 'x)' : '');
+              texts.forEach((t, i) => addCandidate(t, (i === 0 ? 2 : 1) * weight));
+            }
+          }
+          if (imageData) {
+            const texts = await ocrRead(imageData);
+            console.log('    [node-ocr] OCR:', JSON.stringify(texts));
+            texts.forEach((t, i) => addCandidate(t, i === 0 ? 3 : 1.5));
           }
 
-          if (!bestAnswer) {
-            console.log('    ! No 5-char result from any filter');
-            continue;
+          if (candidates.size === 0) { console.log('    ! No candidates'); continue; }
+
+          const sorted = [...candidates.entries()].sort((a, b) => b[1] - a[1]);
+          sorted.forEach(([k, v]) => console.log('      "' + k + '" = ' + v + ' votes'));
+          const bestAnswer = sorted[0][0];
+          console.log('    [CONSENSUS] Winner: "' + bestAnswer + '" (' + sorted[0][1] + ' votes)');
+
+          const variants = [...new Set([bestAnswer, bestAnswer.toUpperCase(), bestAnswer.toLowerCase()])];
+          console.log('    [VARIANTS]', variants.join(', '));
+
+          for (const attempt of variants) {
+            captchaSolved = await submitAnswer(attempt);
+            if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED with "' + attempt + '" on round ' + round + ' <<<'); break; }
+            console.log('    X Wrong "' + attempt + '", trying next variant...');
+            await sleep(1500);
+            if (!await isModalOpen()) break;
           }
-          // One attempt per round — cycle through case variants across rounds
-          const variantIndex = (round - 1) % 3;
-          const attempt = variantIndex === 1 ? bestAnswer.toUpperCase() : variantIndex === 2 ? bestAnswer.toLowerCase() : bestAnswer;
-          console.log('    -> Trying [' + ['orig','UPPER','lower'][variantIndex] + ']:', attempt);
-          captchaSolved = await submitAnswer(attempt);
-          if (captchaSolved) {
-            console.log('  >>> CAPTCHA SOLVED on round', round, '! <<<');
-          } else {
-            console.log('    X Wrong answer "' + attempt + '", next round...');
-          }
-        } catch (e) {
-          console.log('    ! Error:', e.message);
-        }
+          if (!captchaSolved) console.log('    All variants failed, next round...');
+        } catch(e) { console.log('    ! Round error:', e.message); }
       }
 
       if (!captchaSolved) {
         await page.evaluate(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
-          const btn = modal?.querySelector('button');
+          const btn = modal ? modal.querySelector('button') : null;
           if (btn) btn.click();
         });
         await sleep(2000);
@@ -948,7 +1082,7 @@ async function harvestQuota() {
       }
     }
 
-    // ══════════════════════════════════════
+
     console.log('STEP 2: SERVICE NUMBER (USERNAME)');
     // ══════════════════════════════════════
     console.log('  ✓ Login successful!\n');
