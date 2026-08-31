@@ -505,42 +505,59 @@ async function harvestQuota() {
     // ======================================
     console.log('STEP 5: SUBMIT');
     // ======================================
-    await tryMethods([
-      async () => {
-        // Method 1: Focus password field and press Enter (most reliable for forms)
-        await page.focus('#login_password_input_01').catch(() => {});
-        await sleep(500);
-        await page.keyboard.press('Enter');
-        await sleep(6000);
-        console.log('    password field + Enter');
-      },
-      async () => {
-        await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button'));
-          const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) btn.click();
-        });
-        await sleep(6000);
-        console.log('    login button click');
-      },
-      async () => {
-        // Try clicking the button element directly with page.click
-        const loginBtn = await page.$('button.ant-btn-primary, button[type="submit"]');
-        if (loginBtn) await loginBtn.click();
-        await sleep(6000);
-        console.log('    direct button element click');
-      },
-      async () => {
-        await page.keyboard.press('Enter');
-        await sleep(10000);
-        console.log('    global Enter press');
-      },
-      async () => {
-        await page.evaluate(() => { document.querySelector('form')?.submit(); });
-        await sleep(10000);
-        console.log('    form.submit()');
+    
+    // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
+    await sleep(1000);
+    const submitSuccess = await page.evaluate(() => {
+      // Step 1: Trigger validation on all inputs
+      const inputs = document.querySelectorAll('input');
+      inputs.forEach(inp => {
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      
+      // Step 2: Find the Login button (multiple strategies)
+      const btns = Array.from(document.querySelectorAll('button'));
+      let loginBtn = btns.find(b => 
+        b.textContent && b.textContent.toLowerCase().includes('login') ||
+        b.className && (b.className.includes('primary') || b.className.includes('submit'))
+      );
+      
+      // Fallback: look for button inside form
+      if (!loginBtn) {
+        const form = document.querySelector('form');
+        if (form) loginBtn = form.querySelector('button[type="submit"], button.ant-btn-primary');
       }
-    ], 'SUBMIT', 20000);
+      
+      // Fallback: last button on page (usually Submit/Login)
+      if (!loginBtn && btns.length > 0) loginBtn = btns[btns.length - 1];
+      
+      if (!loginBtn) return { success: false, reason: 'No login button found' };
+      
+      // Step 3: Ensure button is enabled
+      if (loginBtn.disabled) {
+        loginBtn.disabled = false;
+        loginBtn.classList.remove('ant-btn-disabled');
+      }
+      
+      // Step 4: Click the button (multiple methods)
+      try {
+        loginBtn.click(); // Native click
+        loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); // Synthetic click
+        return { success: true, buttonText: loginBtn.textContent.trim() };
+      } catch(e) {
+        return { success: false, reason: e.message };
+      }
+    });
+    
+    console.log('    [SUBMIT] Result:', JSON.stringify(submitSuccess));
+    
+    if (!submitSuccess.success) {
+      console.log('    [SUBMIT] Button click failed, trying Enter key fallback...');
+      await page.keyboard.press('Enter');
+    }
+    
+    await sleep(6000);
 
     // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
