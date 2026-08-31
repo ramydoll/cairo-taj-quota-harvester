@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer-extra');
+﻿const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fetch = require('node-fetch');
 
@@ -584,9 +584,11 @@ async function harvestQuota() {
     // CAPTCHA ENGINE v4 (only if captcha was detected)
     // ======================================
     if (postLoginState === 'captcha') {
-      console.log('  [CAPTCHA] Ultimate Engine v4 starting...\n');
+      console.log('  [CAPTCHA] Ultimate Engine v5 starting...\n');
 
       // HELPER: Find the captcha image (largest img inside modal)
+      // Accepts image even if naturalWidth===0 (lazy-load / slow server) as long as
+      // the element has visible dimensions — prevents "No valid captcha image" loops.
       async function findCaptchaImg() {
         return await page.evaluateHandle(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
@@ -596,9 +598,15 @@ async function harvestQuota() {
             const aR = a.getBoundingClientRect(), bR = b.getBoundingClientRect();
             return (bR.width * bR.height) - (aR.width * aR.height);
           });
+          // Pass 1: prefer fully loaded image (naturalWidth > 0)
           for (const img of imgs) {
             const r = img.getBoundingClientRect();
             if (r.width > 80 && r.height > 25 && img.naturalWidth > 0) return img;
+          }
+          // Pass 2: accept visible image even if naturalWidth not ready yet
+          for (const img of imgs) {
+            const r = img.getBoundingClientRect();
+            if (r.width > 80 && r.height > 25) return img;
           }
           return null;
         });
@@ -607,23 +615,27 @@ async function harvestQuota() {
       // HELPER: Canvas preprocessing — 18 filter modes for WE captcha
       async function canvasProcess(imgHandle, filter) {
         return await page.evaluate((imgEl, f) => {
-          if (!imgEl || !imgEl.naturalWidth) return null;
+          if (!imgEl) return null;
+          // Use naturalWidth if available; fall back to rendered dimensions for lazy-loaded imgs
+          const w = imgEl.naturalWidth  || imgEl.getBoundingClientRect().width;
+          const h = imgEl.naturalHeight || imgEl.getBoundingClientRect().height;
+          if (!w || !h) return null;
           const scale = 3;
           const c = document.createElement('canvas');
-          c.width = imgEl.naturalWidth * scale;
-          c.height = imgEl.naturalHeight * scale;
+          c.width  = w * scale;
+          c.height = h * scale;
           const ctx = c.getContext('2d');
           ctx.imageSmoothingEnabled = false;
           ctx.drawImage(imgEl, 0, 0, c.width, c.height);
           const data = ctx.getImageData(0, 0, c.width, c.height);
           const d = data.data;
           for (let i = 0; i < d.length; i += 4) {
-            let r = d[i], g = d[i+1], b = d[i+2];
+            const r = d[i], g = d[i+1], b = d[i+2];
             const lum = 0.299*r + 0.587*g + 0.114*b;
             const max = Math.max(r,g,b), min = Math.min(r,g,b);
             const sat = max === 0 ? 0 : (max - min) / max;
             let keep = false;
-            // ── GROUP A: Color-based (highest priority — WE captcha uses colored text) ──
+            // ── GROUP A: Color-based (WE captcha uses colored text on white/gray bg) ──
             if      (f === 'colorOnly')   { keep = sat > 0.25 && lum < 220 && lum > 20; }
             else if (f === 'colorStrong') { keep = sat > 0.45 && lum < 200 && lum > 15; }
             else if (f === 'colorWide')   { keep = sat > 0.15 && lum < 230 && lum > 10; }
@@ -721,179 +733,179 @@ async function harvestQuota() {
         });
       }
 
-      // HELPER: Re-trigger captcha by clicking Login again
-      async function retriggerLogin() {
-        console.log('    -> Modal closed, re-clicking Login...');
-        await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button'));
-          const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) btn.click();
-        });
-        // Wait for captcha modal to reappear
-        for (let w = 0; w < 15; w++) {
-          await sleep(1000);
-          const hasModal = await page.evaluate(() => {
-            const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
-            return !!modal;
+      // HELPER: Re-trigger captcha — full page reload + fresh login
+      // (old button-click approach is unreliable after WE resets form state)
+      async function doFullReLogin() {
+        console.log('    [RETRIGGER] Full page reload + re-login...');
+        try {
+          await page.goto('https://my.te.eg/echannel/', { waitUntil: 'networkidle2', timeout: 30000 });
+          await page.waitForFunction(
+            () => document.querySelectorAll('input').length >= 2, { timeout: 15000 }
+          );
+          await sleep(randomDelay(2000, 3000));
+          // Username
+          await page.focus('#login_loginid_input_01').catch(() => {});
+          await sleep(500);
+          await page.type('#login_loginid_input_01', WE_USERNAME, { delay: randomDelay(80, 140) });
+          await sleep(randomDelay(2000, 3500));
+          // Dropdown
+          await page.waitForFunction(
+            () => !!document.querySelector('.ant-select-selector, .ant-select'), { timeout: 10000 }
+          ).catch(() => {});
+          const dd = await page.$('.ant-select-selector, .ant-select');
+          if (dd) { await dd.click(); await sleep(1200); }
+          await page.evaluate(() => {
+            for (const el of document.querySelectorAll('.ant-select-item-option, li')) {
+              if (el.textContent && el.textContent.toLowerCase().includes('internet')) { el.click(); return; }
+            }
           });
-          if (hasModal) {
-            console.log('    -> New captcha modal appeared');
-            await sleep(2000);
-            return true;
+          await sleep(randomDelay(2000, 3500));
+          // Password
+          await page.focus('#login_password_input_01').catch(() => {});
+          await sleep(500);
+          await page.type('#login_password_input_01', WE_PASSWORD, { delay: randomDelay(80, 140) });
+          await sleep(randomDelay(2000, 3000));
+          // Submit
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
+            if (btn) btn.click();
+          });
+          // Wait for modal or navigation
+          for (let w = 0; w < 12; w++) {
+            await sleep(1000);
+            if (!page.url().includes('login')) return 'navigated';
+            const hasModal = await page.evaluate(() => !!document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]'));
+            if (hasModal) return 'modal';
           }
-          // Check if we navigated away (login succeeded without captcha this time)
-          if (!page.url().includes('login')) return false;
+          return 'timeout';
+        } catch(e) {
+          console.log('    [RETRIGGER] Error:', e.message);
+          return 'error';
         }
-        return false;
       }
 
-      // MAIN CAPTCHA LOOP — 18-filter smart engine
-      // Priority groups:
-      //   GROUP A (color-based, 8 filters): colorOnly, colorStrong, colorWide, red, redLoose, blue, green, notGray
-      //   GROUP B (luminance, 4 filters):   dark, dark2, dark3, midtone
-      //   GROUP C (threshold, 3 filters):   contrast, thresh128, thresh160
-      //   GROUP D (channel-boost, 3 filters): rBoost, gBoost, satBoost
+      // ======================================================================
+      // MAIN CAPTCHA LOOP -- Ultimate Engine v5
       //
-      // Strategy per round:
-      //   1. PHASE 1: colorOnly + colorStrong → all 3 case variants tried immediately
-      //   2. PHASE 2: All remaining 16 filters vote (weighted) → top-2 submitted
-      //   3. Reject any OCR result < 5 chars (logged)
-      //   4. Fixed modal retrigger: re-fills form + waits 15s before giving up
+      // VOTING RULES:
+      //   colorOnly = 3 votes  (always runs, always in pool)
+      //   every other filter  = 1 vote each
+      //   OCR noise normalization before grouping (0/O, 1/I/l, 5/S, 6/G, 8/B, 9/G, Q/G)
+      //   top-2 candidates submitted IN THE SAME ROUND
+      //   case cycling: round%3 -> orig / UPPER / lower
+      //   image: accept visible img even if naturalWidth===0 (lazy-load fallback)
+      //   modal retrigger: full page reload + full re-login (guaranteed fresh captcha)
+      // ======================================================================
 
-      const COLOR_FILTERS  = ['colorOnly','colorStrong','colorWide','red','redLoose','blue','green','notGray'];
-      const LUM_FILTERS    = ['dark','dark2','dark3','midtone'];
-      const THRESH_FILTERS = ['contrast','thresh128','thresh160'];
-      const BOOST_FILTERS  = ['rBoost','gBoost','satBoost'];
-      const FILTER_WEIGHT  = {};
-      COLOR_FILTERS.forEach(f  => FILTER_WEIGHT[f] = 3);
-      LUM_FILTERS.forEach(f    => FILTER_WEIGHT[f] = 2);
-      THRESH_FILTERS.forEach(f => FILTER_WEIGHT[f] = 1);
-      BOOST_FILTERS.forEach(f  => FILTER_WEIGHT[f] = 1);
-      const ALL_FILTERS = [...COLOR_FILTERS, ...LUM_FILTERS, ...THRESH_FILTERS, ...BOOST_FILTERS];
+      const ALL_FILTERS = [
+        'colorOnly',
+        'colorStrong','colorWide','red','redLoose',
+        'blue','green','notGray',
+        'dark','dark2','dark3','midtone',
+        'contrast','thresh128','thresh160',
+        'rBoost','gBoost','satBoost'
+      ];
+
+      // Normalize OCR result for vote grouping — collapses common OCR confusion chars
+      function normalizeOCR(str) {
+        return str.toUpperCase()
+          .replace(/0/g, 'O')
+          .replace(/1/g, 'I')
+          .replace(/L/g, 'I')
+          .replace(/5/g, 'S')
+          .replace(/6/g, 'G')
+          .replace(/8/g, 'B')
+          .replace(/9/g, 'G')
+          .replace(/Q/g, 'G');
+      }
 
       let captchaSolved = false;
 
       for (let round = 1; round <= 12 && !captchaSolved; round++) {
         console.log('  -- Round', round, '/ 12 --');
 
-        // ── Wait for modal to be present ──────────────────────────────────────
+        // -- Round > 1: wait for modal, retrigger if missing -------------------
         if (round > 1) {
-          let modalFound = false;
+          let modalReady = false;
           for (let w = 0; w < 15; w++) {
             await sleep(1000);
             if (!page.url().includes('login')) { captchaSolved = true; console.log('  [OK] Navigated away!'); break; }
-            if (await isModalOpen()) { modalFound = true; break; }
+            if (await isModalOpen()) { modalReady = true; break; }
           }
           if (captchaSolved) break;
 
-          if (!modalFound) {
-            // Re-fill credentials + click Login to trigger fresh captcha
-            console.log('    Modal not found — re-filling form and clicking Login...');
-            try {
-              await page.evaluate(() => {
-                const u = document.querySelector('#login_loginid_input_01');
-                if (u) { u.focus(); u.select(); }
-              });
-              await sleep(300);
-              await page.focus('#login_password_input_01').catch(() => {});
-              await sleep(300);
-              await page.evaluate(() => {
-                const inp = document.querySelector('#login_password_input_01');
-                if (inp) {
-                  const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                  s.call(inp, ''); inp.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-              });
-              await sleep(500);
-              await page.evaluate(() => {
-                const btns = Array.from(document.querySelectorAll('button'));
-                const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-                if (btn) btn.click();
-              });
-              for (let w2 = 0; w2 < 8; w2++) {
-                await sleep(1000);
-                if (!page.url().includes('login')) { captchaSolved = true; break; }
-                if (await isModalOpen()) { modalFound = true; break; }
-              }
-            } catch(e) { console.log('    Re-trigger error:', e.message); }
-
-            if (!modalFound && !captchaSolved) {
-              console.log('    ! Still no modal after re-trigger, skipping round');
-              continue;
-            }
+          if (!modalReady) {
+            const result = await doFullReLogin();
+            console.log('    [RETRIGGER] Result:', result);
+            if (result === 'navigated') { captchaSolved = true; break; }
+            if (result === 'modal')     { modalReady = true; }
+            if (!modalReady) { console.log('    ! No modal after full re-login, skipping round'); continue; }
           }
-          if (captchaSolved) break;
-          await sleep(1200);
+          await sleep(1500);
         }
 
         try {
-          // ── Wait for valid captcha image (up to 10s) ─────────────────────────
+          // -- Wait for valid captcha image (up to 15s) -------------------------
           let imgHandle = null;
-          for (let retry = 0; retry < 10; retry++) {
+          for (let retry = 0; retry < 15; retry++) {
             imgHandle = await findCaptchaImg();
-            const isValid = await page.evaluate(el => el && el.naturalWidth > 0, imgHandle).catch(() => false);
+            const isValid = await page.evaluate(function(el) {
+              if (!el) return false;
+              if (el.naturalWidth > 0) return true;
+              var r = el.getBoundingClientRect();
+              return r.width > 80 && r.height > 25;
+            }, imgHandle).catch(() => false);
             if (isValid) break;
             imgHandle = null;
             await sleep(1000);
           }
-          if (!imgHandle) { console.log('    ! No valid captcha image after 10s'); continue; }
+          if (!imgHandle) { console.log('    ! No valid captcha image after 15s'); continue; }
 
-          // ── PHASE 1: Priority color filters — colorOnly + colorStrong ─────────
-          let phase1Solved = false;
-          for (const pf of ['colorOnly', 'colorStrong']) {
-            if (phase1Solved || captchaSolved) break;
-            const b64 = await canvasProcess(imgHandle, pf);
-            if (!b64) continue;
-            const texts = await ocrRead(b64);
-            const match = texts.find(t => t.length === 5);
-            console.log('    [' + pf + '] OCR:', JSON.stringify(texts), match ? '[PRIORITY]' : '[SKIP]');
-            if (!match) continue;
-            for (const [label, attempt] of [['orig', match], ['UPPER', match.toUpperCase()], ['lower', match.toLowerCase()]]) {
-              console.log('    -> Trying [' + pf + '/' + label + ']:', attempt);
-              const solved = await submitAnswer(attempt);
-              if (solved) { captchaSolved = true; phase1Solved = true; console.log('  >>> SOLVED [' + pf + '/' + label + '] round', round, '<<<'); break; }
-              console.log('    X Wrong "' + attempt + '"');
-              const stillOpen = await isModalOpen();
-              if (!stillOpen) { if (!page.url().includes('login')) captchaSolved = true; phase1Solved = true; break; }
-              await sleep(1200);
-            }
-          }
-          if (captchaSolved) continue;
-
-          // ── PHASE 2: All 18 filters — weighted voting → top-2 candidates ─────
+          // -- Run ALL 18 filters + build weighted vote pool --------------------
+          // colorOnly = 3 votes, all others = 1 vote
+          // Normalize before grouping to collapse OCR noise variants
           const votes = {};
-          for (const filter of ALL_FILTERS) {
-            if (['colorOnly','colorStrong'].includes(filter)) continue;
-            const b64 = await canvasProcess(imgHandle, filter);
-            if (!b64) continue;
-            const texts = await ocrRead(b64);
-            const match = texts.find(t => t.length === 5);
-            console.log('    [' + filter + '] OCR:', JSON.stringify(texts), match ? '[OK]' : '[SKIP]');
-            if (!match) continue;
-            const key = match.toLowerCase();
-            if (!votes[key]) votes[key] = { weight: 0, original: match };
-            votes[key].weight += FILTER_WEIGHT[filter];
-          }
-
-          const ranked = Object.entries(votes).sort((a, b) => b[1].weight - a[1].weight);
-          if (!ranked.length) { console.log('    ! No 5-char result from any filter'); continue; }
-          console.log('    [VOTE] Weighted results:', ranked.map(([k,v]) => k+'(w='+v.weight+')').join(', '));
-
-          const top2 = ranked.slice(0, 2);
           const variantIndex = (round - 1) % 3;
           const variantLabel = ['orig','UPPER','lower'][variantIndex];
 
-          for (const [key, info] of top2) {
+          for (const filter of ALL_FILTERS) {
+            const b64 = await canvasProcess(imgHandle, filter);
+            if (!b64) continue;
+            const texts = await ocrRead(b64);
+            // Prefer exact 5-char; also accept 6+ truncated to 5 as fallback
+            const raw = texts.find(function(t) { return t.length === 5; }) ||
+                        (texts.find(function(t) { return t.length > 5; }) || '').slice(0, 5) || null;
+            console.log('    [' + filter + '] OCR:', JSON.stringify(texts), raw ? '[OK]' : '[SKIP]');
+            if (!raw || raw.length < 5) continue;
+            const normed = normalizeOCR(raw);
+            const weight = filter === 'colorOnly' ? 3 : 1;
+            if (!votes[normed]) votes[normed] = { weight: 0, best: raw };
+            votes[normed].weight += weight;
+            // colorOnly's reading takes precedence as the "best" original for submission
+            if (filter === 'colorOnly') votes[normed].best = raw;
+          }
+
+          if (!Object.keys(votes).length) { console.log('    ! No 5-char result from any filter'); continue; }
+
+          const ranked = Object.entries(votes).sort(function(a, b) { return b[1].weight - a[1].weight; });
+          console.log('    [VOTE] Results:', ranked.map(function(e) { return e[0]+'(w='+e[1].weight+')'; }).join(', '));
+
+          // -- Submit top-2 in the same round -----------------------------------
+          const top2 = ranked.slice(0, 2);
+          for (const entry of top2) {
             if (captchaSolved) break;
-            const orig = info.original;
-            const attempt = variantIndex === 1 ? orig.toUpperCase() : variantIndex === 2 ? orig.toLowerCase() : orig;
-            console.log('    -> Trying [' + variantLabel + '] w=' + info.weight + ':', attempt);
+            const orig = entry[1].best;
+            const attempt = variantIndex === 1 ? orig.toUpperCase()
+                          : variantIndex === 2 ? orig.toLowerCase()
+                          : orig;
+            console.log('    -> Trying [' + variantLabel + '] w=' + entry[1].weight + ':', attempt);
             captchaSolved = await submitAnswer(attempt);
             if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
             console.log('    X Wrong "' + attempt + '"');
             const stillOpen = await isModalOpen();
             if (!stillOpen) { if (!page.url().includes('login')) captchaSolved = true; break; }
-            await sleep(1200);
+            await sleep(1500);
           }
         } catch (e) {
           console.log('    ! Error:', e.message);
@@ -903,13 +915,14 @@ async function harvestQuota() {
       if (!captchaSolved) {
         await page.evaluate(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
-          const btn = modal?.querySelector('button');
+          const btn = modal && modal.querySelector('button');
           if (btn) btn.click();
         });
         await sleep(2000);
         throw new Error('Captcha unsolvable after 12 rounds - retrying login');
       }
     }
+
 
     // ══════════════════════════════════════
     console.log('STEP 2: SERVICE NUMBER (USERNAME)');
