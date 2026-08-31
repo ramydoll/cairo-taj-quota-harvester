@@ -1082,8 +1082,20 @@ if (postLoginState === 'blocked' || postLoginState === 'unknown') {
 
           if (candidates.size === 0) { console.log('    ! No candidates'); continue; }
 
-          const sorted = [...candidates.entries()].sort((a, b) => b[1] - a[1]);
-          sorted.forEach(([k, v]) => console.log('      "' + k + '" = ' + v + ' votes'));
+          // SMART VOTING: Prefer results with exactly 1 digit (WE captcha pattern: 4 letters + 1 number)
+          const smartSort = [...candidates.entries()].map(([text, votes]) => {
+            const digitCount = (text.match(/\d/g) || []).length;
+            const hasOneDigit = digitCount === 1;
+            // Boost score by 30% if has exactly 1 digit
+            const smartVotes = hasOneDigit ? votes * 1.3 : votes;
+            return [text, votes, smartVotes, hasOneDigit];
+          }).sort((a, b) => b[2] - a[2]); // Sort by smart votes
+
+          console.log('    [VOTING RESULTS]:');
+          smartSort.forEach(([text, origVotes, smartVotes, has1digit]) => {
+            const marker = has1digit ? ' ⭐' : '';
+            console.log('      "' + text + '" = ' + origVotes + ' votes' + marker + (has1digit ? ' (1-digit boost: ' + smartVotes.toFixed(1) + ')' : ''));
+          });
           
           // COLORONLY PRIORITY: If colorOnly returned a result, try it FIRST regardless of vote count
           let colorOnlyAnswer = null;
@@ -1098,17 +1110,25 @@ if (postLoginState === 'blocked' || postLoginState === 'unknown') {
             }
           }
           
-          const bestAnswer = sorted[0][0];
-          console.log('    [CONSENSUS] Winner: "' + bestAnswer + '" (' + sorted[0][1] + ' votes)');
+          const bestAnswer = smartSort[0][0];
+          const secondBest = smartSort.length > 1 ? smartSort[1][0] : null;
+          console.log('    [CONSENSUS] #1: "' + bestAnswer + '" (' + smartSort[0][2].toFixed(1) + ' smart votes)');
+          if (secondBest && smartSort[1][2] >= smartSort[0][2] * 0.6) {
+            console.log('    [CONSENSUS] #2: "' + secondBest + '" (' + smartSort[1][2].toFixed(1) + ' smart votes - close enough to try)');
+          }
 
-          // Build attempt order: colorOnly first (if exists and different), then consensus, then rest
+          // Build attempt order: colorOnly first, then top 2 candidates
           const attemptsToTry = [];
           if (colorOnlyAnswer && colorOnlyAnswer.toLowerCase() !== bestAnswer.toLowerCase()) {
             attemptsToTry.push(...[colorOnlyAnswer, colorOnlyAnswer.toUpperCase(), colorOnlyAnswer.toLowerCase()]);
           }
           attemptsToTry.push(...[bestAnswer, bestAnswer.toUpperCase(), bestAnswer.toLowerCase()]);
+          // Add second-best if it's close (within 60% of winner's score)
+          if (secondBest && smartSort[1][2] >= smartSort[0][2] * 0.6 && secondBest.toLowerCase() !== bestAnswer.toLowerCase()) {
+            attemptsToTry.push(...[secondBest, secondBest.toUpperCase(), secondBest.toLowerCase()]);
+          }
           const uniqueAttempts = [...new Set(attemptsToTry)];
-          console.log('    [VARIANTS]', uniqueAttempts.join(', '));
+          console.log('    [ATTEMPT ORDER]', uniqueAttempts.join(', '));
 
           for (const attempt of uniqueAttempts) {
             captchaSolved = await submitAnswer(attempt);
