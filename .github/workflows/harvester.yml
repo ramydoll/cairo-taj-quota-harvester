@@ -14,7 +14,6 @@ on:
   workflow_dispatch:
 
 env:
-  # Suppress Node deprecation warnings
   NODE_OPTIONS: --no-deprecation
 
 jobs:
