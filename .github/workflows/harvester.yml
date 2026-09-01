@@ -1,16 +1,18 @@
 ﻿name: Cloud Quota Harvester - Line 104
 
 on:
-  # GitHub Actions cron DISABLED - using external webhook only
-  # (uncomment lines below if webhook service fails)
-  # schedule:
-  #   - cron: '5 */2 * * *'
-  #   - cron: '35 1-23/2 * * *'
+  schedule:
+    # GitHub Actions cron (backup if webhook fails)
+    # 00:05, 01:35, 03:05, 04:35, 06:05, 07:35...
+    - cron: '5 */2 * * *'      # :05 of even hours
+    - cron: '35 1-23/2 * * *'  # :35 of odd hours
   
   # PRIMARY TRIGGER: External webhook (100% reliable timing)
+  # Triggered by cron-job.org every 90 minutes exactly
   repository_dispatch:
     types: [harvest_line104]
   
+  # Manual trigger
   workflow_dispatch:
 
 env:
