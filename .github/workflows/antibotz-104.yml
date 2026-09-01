@@ -1,0 +1,57 @@
+name: Antibotz Harvester - Line 104
+
+on:
+  schedule:
+    # GitHub Actions cron (backup if webhook fails)
+    - cron: '0 */2 * * *'   # Every 2 hours fallback
+
+  # PRIMARY TRIGGER: External webhook (100% reliable timing)
+  # Triggered by cron-job.org every 2 hours exactly
+  repository_dispatch:
+    types: [antibotz_line104]
+
+  workflow_dispatch:
+
+env:
+  NODE_OPTIONS: --no-deprecation
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('github-harvester/package.json') }}
+
+      - name: Install dependencies
+        run: |
+          cd github-harvester
+          npm install --prefer-offline --no-audit
+
+      - name: Run Antibotz harvester — Line 104
+        env:
+          FIREBASE_API_KEY:    ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          WE_USERNAME:         ${{ secrets.WE_USERNAME }}
+          WE_PASSWORD:         ${{ secrets.WE_PASSWORD }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_ID:   ${{ secrets.TELEGRAM_GROUP_ID }}
+        run: |
+          cd github-harvester
+          node antibotz-104.js
