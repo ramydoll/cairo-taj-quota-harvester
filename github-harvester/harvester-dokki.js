@@ -1247,7 +1247,11 @@ async function harvestQuota() {
         const dropdowns = await page.$$('.ant-select-selector, .ant-select');
         if (!dropdowns.length) throw new Error('Dropdown not found');
         await dropdowns[0].click();
-        await sleep(1500);
+        await sleep(800);
+        // DISMISS ANY POPUPS AFTER DROPDOWN CLICK
+        console.log('    [POST-DROPDOWN] Dismissing popups...');
+        await dismissAds();
+        await sleep(700);
 
         // Click 0237600094
         const clicked = await page.evaluate(() => {
@@ -1690,7 +1694,11 @@ async function harvestQuota() {
         const dropdowns = await page.$$('.ant-select-selector, .ant-select');
         if (dropdowns.length) {
           await dropdowns[0].click();
-          await sleep(1500);
+          await sleep(800);
+        // DISMISS ANY POPUPS AFTER DROPDOWN CLICK
+        console.log('    [POST-DROPDOWN] Dismissing popups...');
+        await dismissAds();
+        await sleep(700);
           await page.evaluate(() => {
             const opts = Array.from(document.querySelectorAll('.ant-select-item-option-content, .ant-select-item, li, option'));
             const t = opts.find(o => o.textContent && o.textContent.includes('0237600094'));
