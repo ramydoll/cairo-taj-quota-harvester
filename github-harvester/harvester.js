@@ -36,16 +36,41 @@ async function withTimeout(promise, ms, name) {
 }
 
 async function tryMethods(methods, stepName, timeout) {
+  const RETRIES_PER_METHOD = 2; // Each method tries twice before moving to next
+  
   for (let i = 0; i < methods.length; i++) {
-    try {
-      console.log(`  [${i+1}/${methods.length}]`);
-      const result = await withTimeout(methods[i](), timeout, `${stepName} M${i+1}`);
-      console.log(`  ✓ Method ${i+1} SUCCESS`);
-      return result;
-    } catch (e) {
-      console.log(`  ✗ Method ${i+1} FAILED: ${e.message}`);
-      if (i === methods.length - 1) throw new Error(`${stepName} ALL METHODS FAILED`);
-      await sleep(500);
+    let methodSuccess = false;
+    
+    for (let attempt = 1; attempt <= RETRIES_PER_METHOD; attempt++) {
+      try {
+        if (attempt === 1) {
+          console.log(`  [${i+1}/${methods.length}]`);
+        } else {
+          console.log(`  [${i+1}/${methods.length}] retry ${attempt}/${RETRIES_PER_METHOD}`);
+        }
+        
+        const result = await withTimeout(methods[i](), timeout, `${stepName} M${i+1}`);
+        console.log(`  ✓ Method ${i+1} SUCCESS${attempt > 1 ? ` (on attempt ${attempt})` : ''}`);
+        return result;
+        
+      } catch (e) {
+        console.log(`  ✗ Method ${i+1} attempt ${attempt} FAILED: ${e.message}`);
+        
+        if (attempt < RETRIES_PER_METHOD) {
+          // Retry this method after progressive delay
+          const retryDelay = 2000 + (attempt * 2000); // 2s, 4s, 6s...
+          console.log(`    ↻ Retrying method ${i+1} in ${retryDelay/1000}s...`);
+          await sleep(retryDelay);
+        } else {
+          // All retries exhausted for this method, move to next
+          if (i === methods.length - 1) {
+            throw new Error(`${stepName} ALL METHODS FAILED (each tried ${RETRIES_PER_METHOD}x)`);
+          }
+          console.log(`    → Moving to next method...`);
+          await sleep(500);
+          break;
+        }
+      }
     }
   }
 }
@@ -586,50 +611,98 @@ async function harvestQuota() {
       throw new Error('Form validation error: ' + formError);
     }
 
+    // ======================================
+    // SMART NAVIGATION DETECTION v2
+    // Multi-signal: URL change OR dashboard elements visible OR block/captcha
+    // ======================================
     let postLoginState = 'unknown';
-    for (let tick = 0; tick < 20; tick++) {
+    for (let tick = 0; tick < 25; tick++) {
       const currentUrl = page.url();
+      
+      // Signal 1: URL changed away from login
       if (!currentUrl.includes('login')) {
         postLoginState = 'navigated';
         console.log('  [OK] URL changed to:', currentUrl);
         break;
       }
-      // Check for captcha OR block message
+      
+      // Signal 2-5: Check page state (captcha, block, dashboard elements, error)
       const pageState = await page.evaluate(() => {
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
+        const fullText = document.body.innerText;
+        
+        // Captcha detection
         const hasCaptcha = !!modal || text.includes('verification') || text.includes('enter code');
-        // Detect WE block messages
+        
+        // Block message detection
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') || text.includes('try again') ||
                           text.includes('blocked') || text.includes('محاولات') ||
                           text.includes('الحد الاقصى') || text.includes('مره اخرى');
-        return { hasCaptcha, isBlocked, text: text.slice(0, 200) };
+        
+        // Dashboard success indicators (even if URL didn't change - SPA navigation)
+        const hasDashboard = fullText.includes('Current Balance') || 
+                             fullText.includes('Remaining') ||
+                             fullText.includes('Used') ||
+                             !!document.querySelector('[class*="balance"]') ||
+                             !!document.querySelector('[class*="dashboard"]') ||
+                             !!document.querySelector('[class*="quota"]');
+        
+        // Still on login form?
+        const stillOnLogin = fullText.includes('Service number') || 
+                             fullText.includes('Select Type') ||
+                             !!document.querySelector('#login_loginid_input_01');
+        
+        return { hasCaptcha, isBlocked, hasDashboard, stillOnLogin, text: text.slice(0, 200) };
       });
 
+      // Priority 1: Dashboard detected (SUCCESS - even if URL didn't change)
+      if (pageState.hasDashboard && !pageState.stillOnLogin) {
+        postLoginState = 'navigated';
+        console.log('  [OK] Dashboard detected (SPA navigation succeeded)');
+        break;
+      }
+
+      // Priority 2: Block message detected
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
         console.log('  [BLOCKED] WE has blocked this IP/account temporarily');
         console.log('  [BLOCKED] Page text:', pageState.text.slice(0, 150));
         break;
       }
+      
+      // Priority 3: Captcha modal appeared
       if (pageState.hasCaptcha) {
         postLoginState = 'captcha';
         console.log('  [CAPTCHA] Modal detected at', tick + 1, 'seconds');
         break;
       }
+      
+      // Still waiting...
       if (tick % 3 === 0) console.log('  Waiting...', tick + 1, 's');
       await sleep(1000);
     }
 
-    // Handle blocked state — clear cookies and exit cleanly (don't retry)
+    // Handle blocked state — don't throw immediately, note it but try extraction anyway
+    // (Block message might be stale from previous run)
     if (postLoginState === 'blocked') {
-      await clearCookies(); // Clear any saved session
-      throw new Error('WE_BLOCKED: Account/IP temporarily blocked. Will auto-retry on next scheduled run (2h).');
+      console.log('  ⚠️  Block message detected, but will attempt extraction anyway (might be stale)');
+      // Don't throw here - let extraction step determine if it's a real block
     }
 
     if (postLoginState === 'unknown') {
-      throw new Error('Still on login page - no navigation or captcha after 20s');
+      // Before giving up, do one final check for dashboard elements
+      const finalCheck = await page.evaluate(() => {
+        const text = document.body.innerText;
+        return text.includes('Current Balance') || text.includes('Remaining');
+      });
+      if (finalCheck) {
+        console.log('  [OK] Dashboard elements found on final check (slow SPA load)');
+        postLoginState = 'navigated';
+      } else {
+        throw new Error('Still on login page - no navigation, dashboard, captcha, or block after 25s');
+      }
     }
 
     // ======================================
@@ -1064,142 +1137,179 @@ async function harvestQuota() {
     } // end if (!sessionValid)
 
     // ══════════════════════════════════════
-    console.log('STEP 6: EXTRACT');
+    console.log('STEP 6: PERSISTENT EXTRACTION (7 cycles with refresh)');
     // ══════════════════════════════════════
-    const data = await tryMethods([
-      // M1: Walk ALL spans/divs, find ones whose text is ONLY a decimal number,
-      // then check if a nearby sibling contains "Remaining" or "Used"
-      async () => {
-        await sleep(2000);
-        // Wait for balance card to load (extra wait if balance not yet visible)
-        await withTimeout(
-          page.waitForFunction(() => {
-            const text = document.body.innerText;
-            return text.includes('Current Balance') && /[\d,]+\.?\d+\s*EGP/.test(text);
-          }, { timeout: 8000 }),
-          9000, 'balance card wait'
-        ).catch(() => console.log('    [WARN] Balance card slow, proceeding anyway'));
+    
+    let data = null;
+    const MAX_EXTRACTION_CYCLES = 7;
+    
+    for (let cycle = 1; cycle <= MAX_EXTRACTION_CYCLES; cycle++) {
+      try {
+        console.log(`\n  --- EXTRACTION CYCLE ${cycle}/${MAX_EXTRACTION_CYCLES} ---`);
+        
+        data = await tryMethods([
+          // M1: Walk ALL spans/divs, find ones whose text is ONLY a decimal number,
+          // then check if a nearby sibling contains "Remaining" or "Used"
+          async () => {
+            await sleep(2000);
+            // Wait for balance card to load (extra wait if balance not yet visible)
+            await withTimeout(
+              page.waitForFunction(() => {
+                const text = document.body.innerText;
+                return text.includes('Current Balance') && /[\d,]+\.?\d+\s*EGP/.test(text);
+              }, { timeout: 8000 }),
+              9000, 'balance card wait'
+            ).catch(() => console.log('    [WARN] Balance card slow, proceeding anyway'));
 
-        const result = await page.evaluate(() => {
-          const spans = Array.from(document.querySelectorAll('span, div, p'));
-          let remaining = null, used = null, balance = null, plan = null;
+            const result = await page.evaluate(() => {
+              const spans = Array.from(document.querySelectorAll('span, div, p'));
+              let remaining = null, used = null, balance = null, plan = null;
 
-          // Helper: is this text a plain decimal number (with optional commas)?
-          function isNumericText(t) {
-            if (!t) return false;
-            const stripped = t.replace(/,/g, '').trim();
-            return /^\d+(\.\d+)?$/.test(stripped) && !stripped.startsWith('0237') && !stripped.startsWith('023');
-          }
-
-          for (let i = 0; i < spans.length; i++) {
-            const t = spans[i].innerText?.trim();
-            if (!t || t.length > 100) continue;
-
-            // Find "Remaining" label — check i-1, i-2 for the number
-            if (t === 'Remaining') {
-              for (let back = 1; back <= 3; back++) {
-                if (i - back >= 0) {
-                  const candidate = spans[i - back].innerText?.trim();
-                  if (isNumericText(candidate)) { remaining = candidate; break; }
-                }
+              // Helper: is this text a plain decimal number (with optional commas)?
+              function isNumericText(t) {
+                if (!t) return false;
+                const stripped = t.replace(/,/g, '').trim();
+                return /^\d+(\.\d+)?$/.test(stripped) && !stripped.startsWith('0237') && !stripped.startsWith('023');
               }
-            }
 
-            // Find "Used" label — check i-1, i-2 for the number
-            if (t === 'Used') {
-              for (let back = 1; back <= 3; back++) {
-                if (i - back >= 0) {
-                  const candidate = spans[i - back].innerText?.trim();
-                  if (isNumericText(candidate)) { used = candidate; break; }
+              for (let i = 0; i < spans.length; i++) {
+                const t = spans[i].innerText?.trim();
+                if (!t || t.length > 100) continue;
+
+                // Find "Remaining" label — check i-1, i-2 for the number
+                if (t === 'Remaining') {
+                  for (let back = 1; back <= 3; back++) {
+                    if (i - back >= 0) {
+                      const candidate = spans[i - back].innerText?.trim();
+                      if (isNumericText(candidate)) { remaining = candidate; break; }
+                    }
+                  }
                 }
-              }
-            }
 
-            // Balance: "Current Balance" label then look forward for EGP number
-            if (t === 'Current Balance') {
-              for (let fwd = 1; fwd <= 8; fwd++) {
-                if (i + fwd < spans.length) {
-                  const candidate = spans[i + fwd].innerText?.trim();
-                  if (isNumericText(candidate)) { balance = candidate; break; }
+                // Find "Used" label — check i-1, i-2 for the number
+                if (t === 'Used') {
+                  for (let back = 1; back <= 3; back++) {
+                    if (i - back >= 0) {
+                      const candidate = spans[i - back].innerText?.trim();
+                      if (isNumericText(candidate)) { used = candidate; break; }
+                    }
+                  }
                 }
+
+                // Balance: "Current Balance" label then look forward for EGP number
+                if (t === 'Current Balance') {
+                  for (let fwd = 1; fwd <= 8; fwd++) {
+                    if (i + fwd < spans.length) {
+                      const candidate = spans[i + fwd].innerText?.trim();
+                      if (isNumericText(candidate)) { balance = candidate; break; }
+                    }
+                  }
+                }
+
+                // Plan: contains "GB" and "Speed"
+                if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
               }
-            }
 
-            // Plan: contains "GB" and "Speed"
-            if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
+              // Fallback: if balance still not found, try regex on full page text
+              if (!balance) {
+                const text = document.body.innerText;
+                const bMatch = text.match(/Current Balance\s*[\n\r\s]*([\d,]+\.?\d+)/i)
+                            || text.match(/([\d,]+\.?\d+)\s*EGP/i);
+                if (bMatch) balance = bMatch[1];
+              }
+
+              if (!remaining) throw new Error('no remaining found');
+              return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
+            });
+            const parsed = {
+              remaining: stripNum(result.remaining),
+              used: stripNum(result.used) || 0,
+              balance: stripNum(result.balance) || 0,
+              plan: result.plan
+            };
+            if (!parsed.remaining && parsed.remaining !== 0) throw new Error('no data after stripNum');
+            console.log('    M1 numeric-only sibling scan');
+            return parsed;
+          },
+          // M2: innerText of whole page, regex number BEFORE label word (on same or adjacent line)
+          async () => {
+            await sleep(5000);
+            const result = await page.evaluate(() => {
+              const text = document.body.innerText;
+              // The page renders: "1,391.34\nRemaining" or "1,391.34 Remaining"
+              const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
+              const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
+              const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i)
+                     || text.match(/([\d,]+\.?\d+)\s*EGP/i);
+              const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
+              if (!r) throw new Error('no remaining in page text');
+              return {
+                remaining: r[1],
+                used: u?.[1] || '0',
+                balance: b?.[1] || '0',
+                plan: p?.[0]?.trim() || 'Unknown'
+              };
+            });
+            const parsed = {
+              remaining: stripNum(result.remaining),
+              used: stripNum(result.used) || 0,
+              balance: stripNum(result.balance) || 0,
+              plan: result.plan
+            };
+            if (!parsed.remaining) throw new Error('no data M2');
+            console.log('    M2 page text regex number-before-label');
+            return parsed;
+          },
+          // M3: HTML source regex fallback
+          async () => {
+            await sleep(8000);
+            const html = await withTimeout(page.content(), 8000, 'page.content');
+            const r = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Remaining/i);
+            const u = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Used/i);
+            const b = html.match(/>([\d,]+\.?\d+)\s*EGP</i);
+            if (!r) throw new Error('no data in html');
+            return {
+              remaining: stripNum(r[1]),
+              used: stripNum(u?.[1]) || 0,
+              balance: stripNum(b?.[1]) || 0,
+              plan: 'Unknown'
+            };
           }
-
-          // Fallback: if balance still not found, try regex on full page text
-          if (!balance) {
-            const text = document.body.innerText;
-            const bMatch = text.match(/Current Balance\s*[\n\r\s]*([\d,]+\.?\d+)/i)
-                        || text.match(/([\d,]+\.?\d+)\s*EGP/i);
-            if (bMatch) balance = bMatch[1];
-          }
-
-          if (!remaining) throw new Error('no remaining found');
-          return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
-        });
-        const parsed = {
-          remaining: stripNum(result.remaining),
-          used: stripNum(result.used) || 0,
-          balance: stripNum(result.balance) || 0,
-          plan: result.plan
-        };
-        if (!parsed.remaining && parsed.remaining !== 0) throw new Error('no data after stripNum');
-        console.log('    M1 numeric-only sibling scan');
-        return parsed;
-      },
-      // M2: innerText of whole page, regex number BEFORE label word (on same or adjacent line)
-      async () => {
-        await sleep(5000);
-        const result = await page.evaluate(() => {
-          const text = document.body.innerText;
-          // The page renders: "1,391.34\nRemaining" or "1,391.34 Remaining"
-          const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
-          const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
-          const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i)
-                 || text.match(/([\d,]+\.?\d+)\s*EGP/i);
-          const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
-          if (!r) throw new Error('no remaining in page text');
-          return {
-            remaining: r[1],
-            used: u?.[1] || '0',
-            balance: b?.[1] || '0',
-            plan: p?.[0]?.trim() || 'Unknown'
-          };
-        });
-        const parsed = {
-          remaining: stripNum(result.remaining),
-          used: stripNum(result.used) || 0,
-          balance: stripNum(result.balance) || 0,
-          plan: result.plan
-        };
-        if (!parsed.remaining) throw new Error('no data M2');
-        console.log('    M2 page text regex number-before-label');
-        return parsed;
-      },
-      // M3: HTML source regex fallback
-      async () => {
-        await sleep(8000);
-        const html = await withTimeout(page.content(), 8000, 'page.content');
-        const r = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Remaining/i);
-        const u = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Used/i);
-        const b = html.match(/>([\d,]+\.?\d+)\s*EGP</i);
-        if (!r) throw new Error('no data in html');
-        return {
-          remaining: stripNum(r[1]),
-          used: stripNum(u?.[1]) || 0,
-          balance: stripNum(b?.[1]) || 0,
-          plan: 'Unknown'
-        };
+        ], 'EXTRACT', 30000);
+        
+        // SUCCESS!
+        console.log(`  ✓ Extraction succeeded on cycle ${cycle}!`);
+        break;
+        
+      } catch (extractError) {
+        console.log(`  ✗ Cycle ${cycle} failed: ${extractError.message}`);
+        
+        if (cycle < MAX_EXTRACTION_CYCLES) {
+          console.log(`  ↻ Refreshing page and retrying... (${MAX_EXTRACTION_CYCLES - cycle} cycles remaining)`);
+          await sleep(3000);
+          await page.reload({ waitUntil: 'networkidle2', timeout: 30000 }).catch(e => {
+            console.log('    [WARN] Reload timeout, continuing anyway');
+          });
+          await sleep(5000); // Wait for dashboard to fully load after refresh
+        } else {
+          // All cycles exhausted
+          throw new Error(`EXTRACTION FAILED after ${MAX_EXTRACTION_CYCLES} cycles: ${extractError.message}`);
+        }
       }
-    ], 'EXTRACT', 30000);
+    }
+    
+    if (!data) {
+      throw new Error('Extraction loop completed but no data was captured (should not happen)');
+    }
 
+    console.log('\n  ══════════════════════════════════════');
+    console.log('  📊 EXTRACTED DATA:');
+    console.log('  ══════════════════════════════════════');
     console.log('  Remaining:', data.remaining, 'GB');
     console.log('  Used:', data.used, 'GB');
     console.log('  Balance:', data.balance, 'EGP');
-    console.log('  Plan:', data.plan, '\n');
+    console.log('  Plan:', data.plan);
+    console.log('  ══════════════════════════════════════\n');
 
     // ══════════════════════════════════════
     console.log('STEP 7: FIRESTORE');
