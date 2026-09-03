@@ -3,10 +3,12 @@ name: Antibotz Harvester - Line 104
 on:
   schedule:
     # GitHub Actions cron (backup if webhook fails)
-    - cron: '0 */2 * * *'   # Every 2 hours fallback
+    # Every 90 minutes = :00, :30 of alternating hours
+    - cron: '0 0-22/3 * * *'    # 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
+    - cron: '30 1-23/3 * * *'   # 01:30, 04:30, 07:30, 10:30, 13:30, 16:30, 19:30, 22:30
 
   # PRIMARY TRIGGER: External webhook (100% reliable timing)
-  # Triggered by cron-job.org every 2 hours exactly
+  # Triggered by cron-job.org every 90 minutes exactly
   repository_dispatch:
     types: [antibotz_line104]
 
@@ -18,6 +20,7 @@ env:
 jobs:
   harvest:
     runs-on: ubuntu-latest
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v4
