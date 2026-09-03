@@ -3,11 +3,12 @@ name: Antibotz Harvester - Dokki 094
 on:
   schedule:
     # GitHub Actions cron (backup if webhook fails)
-    # Offset 20 min from Line 104 to avoid runner competition
-    - cron: '20 */2 * * *'   # Every 2 hours fallback (offset)
+    # Every 90 minutes, offset 10 min from Line 104 to avoid runner competition
+    - cron: '10 0-22/3 * * *'   # 00:10, 03:10, 06:10, 09:10, 12:10, 15:10, 18:10, 21:10
+    - cron: '40 1-23/3 * * *'   # 01:40, 04:40, 07:40, 10:40, 13:40, 16:40, 19:40, 22:40
 
   # PRIMARY TRIGGER: External webhook (100% reliable timing)
-  # Triggered by cron-job.org every 2 hours exactly
+  # Triggered by cron-job.org every 90 minutes exactly
   repository_dispatch:
     types: [antibotz_dokki]
 
@@ -19,6 +20,7 @@ env:
 jobs:
   harvest:
     runs-on: ubuntu-latest
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v4
