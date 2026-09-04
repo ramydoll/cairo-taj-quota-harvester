@@ -612,28 +612,37 @@ async function harvestQuota() {
     }
 
     // ======================================
-    // SMART NAVIGATION DETECTION v2
-    // Multi-signal: URL change OR dashboard elements visible OR block/captcha
+    // ULTIMATE NAVIGATION DETECTION v3
+    // 100ms polling for INSTANT captcha detection (no more wasted attempts!)
+    // Multi-signal: URL change OR dashboard elements OR block OR captcha
     // ======================================
     let postLoginState = 'unknown';
-    for (let tick = 0; tick < 25; tick++) {
+    const MAX_TICKS = 250; // 250 * 100ms = 25 seconds total
+    
+    for (let tick = 0; tick < MAX_TICKS; tick++) {
       const currentUrl = page.url();
       
       // Signal 1: URL changed away from login
       if (!currentUrl.includes('login')) {
         postLoginState = 'navigated';
-        console.log('  [OK] URL changed to:', currentUrl);
+        console.log('  [OK] URL changed to:', currentUrl, `(${tick * 0.1}s)`);
         break;
       }
       
-      // Signal 2-5: Check page state (captcha, block, dashboard elements, error)
+      // Signal 2-5: Check page state (RAPID POLLING - check EVERY 100ms!)
       const pageState = await page.evaluate(() => {
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
         const fullText = document.body.innerText;
         
-        // Captcha detection
-        const hasCaptcha = !!modal || text.includes('verification') || text.includes('enter code');
+        // CAPTCHA detection (multiple strategies for instant detection)
+        const hasCaptcha = !!modal || 
+                           text.includes('verification') || 
+                           text.includes('enter code') ||
+                           text.includes('captcha') ||
+                           !!document.querySelector('input[placeholder*="code"]') ||
+                           !!document.querySelector('input[placeholder*="Code"]') ||
+                           !!document.querySelector('[class*="captcha"]');
         
         // Block message detection
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
@@ -657,14 +666,22 @@ async function harvestQuota() {
         return { hasCaptcha, isBlocked, hasDashboard, stillOnLogin, text: text.slice(0, 200) };
       });
 
-      // Priority 1: Dashboard detected (SUCCESS - even if URL didn't change)
+      // Priority 1: CAPTCHA detected (INSTANT - within first 100ms!)
+      if (pageState.hasCaptcha) {
+        postLoginState = 'captcha';
+        const detectionTime = (tick * 0.1).toFixed(1);
+        console.log(`  [CAPTCHA] ⚡ INSTANT DETECTION at ${detectionTime}s (tick ${tick})`);
+        break;
+      }
+
+      // Priority 2: Dashboard detected (SUCCESS - even if URL didn't change)
       if (pageState.hasDashboard && !pageState.stillOnLogin) {
         postLoginState = 'navigated';
         console.log('  [OK] Dashboard detected (SPA navigation succeeded)');
         break;
       }
 
-      // Priority 2: Block message detected
+      // Priority 3: Block message detected
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
         console.log('  [BLOCKED] WE has blocked this IP/account temporarily');
@@ -672,16 +689,14 @@ async function harvestQuota() {
         break;
       }
       
-      // Priority 3: Captcha modal appeared
-      if (pageState.hasCaptcha) {
-        postLoginState = 'captcha';
-        console.log('  [CAPTCHA] Modal detected at', tick + 1, 'seconds');
-        break;
+      // Log progress less frequently (every 3 seconds instead of every 1 second)
+      if (tick > 0 && tick % 30 === 0) {
+        const seconds = Math.round(tick * 0.1);
+        console.log(`  Waiting... ${seconds} s`);
       }
       
-      // Still waiting...
-      if (tick % 3 === 0) console.log('  Waiting...', tick + 1, 's');
-      await sleep(1000);
+      // RAPID POLL: 100ms instead of 1000ms
+      await sleep(100);
     }
 
     // Handle blocked state — don't throw immediately, note it but try extraction anyway
@@ -1118,6 +1133,54 @@ async function harvestQuota() {
         await sleep(2000);
         throw new Error('Captcha unsolvable after 12 rounds - retrying login');
       }
+      
+      // ══════════════════════════════════════
+      // POST-CAPTCHA NAVIGATION VERIFICATION
+      // CRITICAL: Wait for dashboard to load before proceeding!
+      // ══════════════════════════════════════
+      console.log('  [POST-CAPTCHA] Waiting for dashboard navigation...');
+      
+      let dashboardReached = false;
+      for (let tick = 0; tick < 300; tick++) { // 30 seconds max (300 × 100ms)
+        const currentUrl = page.url();
+        
+        // Check if redirected back to login (login failed)
+        const pageCheck = await page.evaluate(() => {
+          const text = document.body.innerText;
+          const hasLoginForm = !!document.querySelector('#login_loginid_input_01');
+          const hasDashboard = text.includes('Current Balance') || 
+                               text.includes('Remaining') ||
+                               text.includes('Used') ||
+                               !!document.querySelector('[class*="balance"]');
+          return { hasLoginForm, hasDashboard };
+        });
+        
+        // Success: Dashboard loaded
+        if (pageCheck.hasDashboard && !pageCheck.hasLoginForm) {
+          dashboardReached = true;
+          const waitTime = (tick * 0.1).toFixed(1);
+          console.log(`  ✓ Dashboard reached after ${waitTime}s`);
+          break;
+        }
+        
+        // Failure: Redirected back to login
+        if (pageCheck.hasLoginForm && !pageCheck.hasDashboard) {
+          const waitTime = (tick * 0.1).toFixed(1);
+          console.log(`  ✗ Redirected to login after ${waitTime}s - CAPTCHA solve didn't authenticate`);
+          throw new Error('Post-CAPTCHA redirect to login - authentication failed');
+        }
+        
+        // Log progress
+        if (tick > 0 && tick % 30 === 0) {
+          console.log(`    Waiting for dashboard... ${Math.round(tick * 0.1)}s`);
+        }
+        
+        await sleep(100);
+      }
+      
+      if (!dashboardReached) {
+        throw new Error('Dashboard did not load within 30s after CAPTCHA solve');
+      }
     }
 
     // ══════════════════════════════════════
@@ -1125,14 +1188,8 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     console.log('  ✓ Login successful!\n');
 
-    // Save session cookies for next run (avoids login entirely if session still valid)
-    try {
-      const cookies = await page.cookies();
-      const relevantCookies = cookies.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
-      if (relevantCookies.length > 0) {
-        await saveCookies(relevantCookies);
-      }
-    } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
+    // NOTE: Cookie save moved to AFTER dashboard verification (below)
+    // to prevent saving invalid cookies when CAPTCHA solve doesn't actually authenticate
 
     } // end if (!sessionValid)
 
@@ -1140,12 +1197,55 @@ async function harvestQuota() {
     console.log('STEP 6: PERSISTENT EXTRACTION (7 cycles with refresh)');
     // ══════════════════════════════════════
     
+    // ══════════════════════════════════════
+    // SAVE SESSION COOKIES (MOVED HERE - after dashboard verification)
+    // Only save cookies if we successfully reached dashboard
+    // ══════════════════════════════════════
+    try {
+      const cookies = await page.cookies();
+      const relevantCookies = cookies.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
+      if (relevantCookies.length > 0) {
+        await saveCookies(relevantCookies);
+        console.log('  [SESSION] ✓ Valid session cookies saved (dashboard verified)\n');
+      }
+    } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
+    
     let data = null;
     const MAX_EXTRACTION_CYCLES = 7;
     
     for (let cycle = 1; cycle <= MAX_EXTRACTION_CYCLES; cycle++) {
       try {
         console.log(`\n  --- EXTRACTION CYCLE ${cycle}/${MAX_EXTRACTION_CYCLES} ---`);
+        
+        // ══════════════════════════════════════
+        // PRE-EXTRACTION PAGE VERIFICATION
+        // Ensure we're on dashboard before attempting to extract
+        // ══════════════════════════════════════
+        const currentUrl = page.url();
+        const pageVerification = await page.evaluate(() => {
+          const text = document.body.innerText;
+          const hasLoginForm = !!document.querySelector('#login_loginid_input_01') || 
+                               text.includes('Service number') ||
+                               text.includes('Select Type');
+          const hasDashboard = text.includes('Current Balance') || 
+                               text.includes('Remaining') ||
+                               !!document.querySelector('[class*="balance"]');
+          return { hasLoginForm, hasDashboard, url: window.location.href };
+        });
+        
+        if (pageVerification.hasLoginForm && !pageVerification.hasDashboard) {
+          console.log(`  ✗ ERROR: Still on login page (${pageVerification.url})`);
+          console.log('  Session expired or redirect occurred - cannot extract from login form');
+          throw new Error('SESSION_EXPIRED: Redirected to login page during extraction');
+        }
+        
+        if (!pageVerification.hasDashboard) {
+          console.log(`  ⚠️  WARNING: Dashboard elements not detected on page`);
+          console.log(`  URL: ${pageVerification.url}`);
+          console.log('  Attempting extraction anyway (might be slow-loading dashboard)...');
+        } else {
+          console.log(`  ✓ Page verification: On dashboard`);
+        }
         
         data = await tryMethods([
           // M1: Walk ALL spans/divs, find ones whose text is ONLY a decimal number,
@@ -1291,6 +1391,36 @@ async function harvestQuota() {
             console.log('    [WARN] Reload timeout, continuing anyway');
           });
           await sleep(5000); // Wait for dashboard to fully load after refresh
+          
+          // ══════════════════════════════════════
+          // POST-REFRESH SESSION VERIFICATION
+          // Check if reload redirected us back to login (session expired)
+          // ══════════════════════════════════════
+          const postRefreshUrl = page.url();
+          if (postRefreshUrl.includes('/login') || postRefreshUrl.includes('#/login')) {
+            console.log('  ✗ CRITICAL: Page refresh redirected to login page');
+            console.log('  Session expired during extraction - saved cookies are invalid');
+            
+            // Clear invalid cookies
+            await clearCookies();
+            
+            throw new Error('SESSION_EXPIRED: Refresh redirected to login - re-login required on next attempt');
+          }
+          
+          // Verify dashboard is still present
+          const postRefreshCheck = await page.evaluate(() => {
+            const text = document.body.innerText;
+            return text.includes('Current Balance') || text.includes('Remaining');
+          });
+          
+          if (!postRefreshCheck) {
+            console.log('  ⚠️  WARNING: Dashboard elements not found after refresh');
+            console.log('  URL:', postRefreshUrl);
+            console.log('  Session might be expired - will try extraction anyway');
+          } else {
+            console.log('  ✓ Post-refresh verification: Dashboard still loaded');
+          }
+          
         } else {
           // All cycles exhausted
           throw new Error(`EXTRACTION FAILED after ${MAX_EXTRACTION_CYCLES} cycles: ${extractError.message}`);
