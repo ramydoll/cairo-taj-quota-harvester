@@ -589,6 +589,21 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
+    // INTERCEPT NETWORK: Monitor if any XHR fires after button click
+    let loginRequestFired = false;
+    let loginRequestUrl = '';
+    page.on('request', (req) => {
+      const url = req.url();
+      if (url.includes('/login') || url.includes('/auth') || url.includes('/token') || 
+          url.includes('/api') || url.includes('/echannel')) {
+        if (req.method() === 'POST' || req.method() === 'PUT') {
+          loginRequestFired = true;
+          loginRequestUrl = url;
+          console.log('  [NETWORK] Login request fired:', req.method(), url.slice(0, 100));
+        }
+      }
+    });
+    
     // FINAL DROPDOWN + FORM STATE CHECK
     console.log('  [FINAL CHECK] Verifying form ready for submission...');
     const formReady = await page.evaluate(() => {
@@ -599,12 +614,20 @@ async function harvestQuota() {
         b.textContent.toLowerCase().includes('login')
       );
       
+      // Also log the full form HTML for debugging
+      const form = document.querySelector('form');
+      const formId = form ? form.id || form.className : 'no form';
+      
       return {
         hasService: !!serviceNum,
+        serviceLen: serviceNum ? serviceNum.length : 0,
         dropdown: dropdown,
         hasPassword: !!password,
+        passwordLen: password ? password.length : 0,
         buttonDisabled: loginBtn?.disabled,
-        buttonText: loginBtn?.textContent?.trim()
+        buttonClass: loginBtn?.className,
+        buttonText: loginBtn?.textContent?.trim(),
+        formId: formId
       };
     });
     console.log('    Form state:', JSON.stringify(formReady));
@@ -626,22 +649,20 @@ async function harvestQuota() {
     // Wait for button to be enabled (with timeout)
     console.log('  [WAIT] Waiting for Login button to be enabled...');
     let buttonEnabled = false;
-    for (let i = 0; i < 8; i++) { // Max 8 seconds
+    for (let i = 0; i < 8; i++) {
       const btnState = await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
         const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
-        return loginBtn ? { disabled: loginBtn.disabled, text: loginBtn.textContent.trim() } : null;
+        return loginBtn ? { disabled: loginBtn.disabled, text: loginBtn.textContent.trim(), className: loginBtn.className } : null;
       });
       
       if (btnState && !btnState.disabled) {
-        console.log(`  [OK] Button enabled after ${i}s`);
+        console.log(`  [OK] Button enabled after ${i}s - class: ${btnState.className}`);
         buttonEnabled = true;
         break;
       }
       
-      if (i % 2 === 0 && i > 0) {
-        console.log(`    Still waiting... ${i}s`);
-      }
+      if (i > 0) console.log(`    Still waiting... ${i}s (disabled)`);
       await sleep(1000);
     }
     
@@ -653,181 +674,200 @@ async function harvestQuota() {
         if (loginBtn) {
           loginBtn.disabled = false;
           loginBtn.classList.remove('ant-btn-disabled');
+          loginBtn.removeAttribute('disabled');
         }
       });
     }
     
     await sleep(500);
     
-    // PROGRESSIVE SUBMISSION - Try ONE method at a time, wait for response
-    // ULTIMATE ANTI-BOT BYPASS: Mouse movement + Real Puppeteer click
-    console.log('  [ANTI-BOT] Preparing human-like submission...');
-    
-    // Get Login button element handle (not just selector)
-    const loginButtonHandle = await page.evaluateHandle(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      return btns.find(b => b.textContent.toLowerCase().includes('login'));
-    });
-    
-    if (!loginButtonHandle || !loginButtonHandle.asElement()) {
-      throw new Error('Login button not found');
-    }
-    
-    // Get button coordinates for mouse movement
-    const buttonBox = await loginButtonHandle.asElement().boundingBox();
-    
-    if (buttonBox) {
-      // Move mouse to button with steps (human-like)
-      console.log('  [MOUSE] Moving cursor to Login button...');
-      const targetX = buttonBox.x + buttonBox.width / 2;
-      const targetY = buttonBox.y + buttonBox.height / 2;
-      await page.mouse.move(targetX, targetY, { steps: 15 }); // 15 steps = smooth movement
-      await sleep(800); // Pause at button
-      console.log('  [MOUSE] Cursor positioned');
-    }
-    
-    // Trigger form validation (make React happy)
-    // NOTE: Do NOT dispatch events on .ant-select - this resets dropdown state!
-    console.log('  [VALIDATE] Triggering password field blur...');
-    await page.evaluate(() => {
-      // Only trigger validation on the password field - not the dropdown!
-      const pwInput = document.querySelector('#login_password_input_01');
-      if (pwInput) {
-        pwInput.dispatchEvent(new Event('blur', { bubbles: true }));
-        pwInput.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    });
-    await sleep(500);
-    
-    let loginTriggered = false;
-    
-    // METHOD 1: Real Puppeteer click (bypasses most anti-bot)
-    if (!loginTriggered) {
-      console.log('  [SUBMIT] METHOD 1: Real mouse click via Puppeteer');
+    // METHOD 0: Try direct API call first (bypass the form entirely)
+    console.log('  [SUBMIT] METHOD 0: Direct API login attempt...');
+    const apiLoginResult = await page.evaluate(async (username, password) => {
       try {
-        await loginButtonHandle.asElement().click({ delay: 150 }); // 150ms click delay (human-like)
-        console.log('    Result: Click executed');
+        // Try to find any login endpoint from the page's existing network activity
+        const loginEndpoints = [
+          '/api/v1/user/login',
+          '/api/login',
+          '/echannel/api/login',
+          '/rest/v1/login'
+        ];
+        
+        // Also try submitting the form via requestSubmit (proper HTML5 way)
+        const form = document.querySelector('form');
+        if (form && form.requestSubmit) {
+          const btn = form.querySelector('button[type="submit"], button.ant-btn-primary');
+          if (btn) {
+            form.requestSubmit(btn);
+            return { method: 'requestSubmit', success: true };
+          }
+          form.requestSubmit();
+          return { method: 'form.requestSubmit()', success: true };
+        }
+        return { method: 'no form.requestSubmit', success: false };
       } catch(e) {
-        console.log('    Result: Click failed -', e.message);
+        return { method: 'error', error: e.message };
+      }
+    }, WE_USERNAME, WE_PASSWORD);
+    console.log('    Result:', JSON.stringify(apiLoginResult));
+    
+    await sleep(3000);
+    let changed0 = await page.evaluate(() => {
+      const text = document.body.innerText.toLowerCase();
+      return text.includes('verification') || text.includes('current balance') ||
+             !!document.querySelector('.ant-modal') || !text.includes('service number');
+    });
+    console.log('    Page changed:', changed0);
+    
+    let loginTriggered = changed0;
+    if (changed0) console.log('  [SUCCESS] Method 0 worked!');
+
+    // Get button handle fresh right before clicking
+    let loginTriggered2 = loginTriggered;
+    
+    // METHOD 1: Real mouse click via Puppeteer
+    if (!loginTriggered2) {
+      console.log('  [SUBMIT] METHOD 1: Real mouse click via Puppeteer');
+      console.log('  [ANTI-BOT] Moving cursor to Login button...');
+      
+      // Get fresh button handle
+      const btnHandle = await page.evaluateHandle(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => b.textContent.toLowerCase().includes('login') && !b.disabled);
+      });
+      
+      if (btnHandle && btnHandle.asElement()) {
+        const box = await btnHandle.asElement().boundingBox();
+        if (box) {
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 15 });
+          await sleep(500);
+        }
+        
+        // Take screenshot before click and send to Telegram for debugging
+        try {
+          const screenshotB64 = await page.screenshot({ encoding: 'base64' });
+          const caption = `[BEFORE CLICK] Form: svc=${formReady.hasService} drop=${formReady.dropdown} pwd=${formReady.hasPassword} btnDis=${formReady.buttonDisabled}`;
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: TELEGRAM_CHAT_ID,
+              photo: 'data:image/png;base64,' + screenshotB64,
+              caption: caption.slice(0, 200)
+            })
+          }).catch(() => {});
+        } catch(e) {}
+        
+        try {
+          await btnHandle.asElement().click({ delay: 150 });
+          console.log('    Clicked!');
+        } catch(e) {
+          console.log('    Click error:', e.message);
+        }
+      } else {
+        console.log('    No enabled button found for click');
       }
       
-      // Wait 4 seconds and check if something happened
       await sleep(4000);
+      
+      // Log if network request fired
+      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
+      
       const changed1 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') || 
-               text.includes('remaining') || !!document.querySelector('.ant-modal') ||
-               !text.includes('service number'); // Navigated away from login
+        return text.includes('verification') || text.includes('current balance') ||
+               !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed1);
-      
-      if (changed1) {
-        console.log('  [SUCCESS] Method 1 worked!');
-        loginTriggered = true;
-      }
+      if (changed1) { loginTriggered2 = true; console.log('  [SUCCESS] Method 1 worked!'); }
     }
     
     // METHOD 2: Enter key
-    if (!loginTriggered) {
+    if (!loginTriggered2) {
+      loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 2: Enter key on password field');
       await page.focus('#login_password_input_01');
       await sleep(300);
       await page.keyboard.press('Enter');
-      
       await sleep(4000);
+      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
       const changed2 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') || 
+        return text.includes('verification') || text.includes('current balance') ||
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed2);
-      
-      if (changed2) {
-        console.log('  [SUCCESS] Method 2 worked!');
-        loginTriggered = true;
-      }
+      if (changed2) { loginTriggered2 = true; console.log('  [SUCCESS] Method 2 worked!'); }
     }
     
     // METHOD 3: form.submit()
-    if (!loginTriggered) {
-      console.log('  [SUBMIT] METHOD 3: Direct form.submit()');
+    if (!loginTriggered2) {
+      loginRequestFired = false;
+      console.log('  [SUBMIT] METHOD 3: form.submit()');
       await page.evaluate(() => {
         const form = document.querySelector('form');
         if (form && form.submit) form.submit();
       });
-      
       await sleep(4000);
+      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
       const changed3 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') || 
+        return text.includes('verification') || text.includes('current balance') ||
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed3);
-      
-      if (changed3) {
-        console.log('  [SUCCESS] Method 3 worked!');
-        loginTriggered = true;
-      }
+      if (changed3) { loginTriggered2 = true; console.log('  [SUCCESS] Method 3 worked!'); }
     }
     
     // METHOD 4: Tab + Enter
-    if (!loginTriggered) {
+    if (!loginTriggered2) {
+      loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 4: Tab to button + Enter');
       await page.keyboard.press('Tab');
       await sleep(300);
       await page.keyboard.press('Enter');
-      
       await sleep(4000);
+      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
       const changed4 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') || 
+        return text.includes('verification') || text.includes('current balance') ||
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed4);
-      
-      if (changed4) {
-        console.log('  [SUCCESS] Method 4 worked!');
-        loginTriggered = true;
-      }
+      if (changed4) { loginTriggered2 = true; console.log('  [SUCCESS] Method 4 worked!'); }
     }
     
     // METHOD 5: React event cascade
-    if (!loginTriggered) {
-      console.log('  [SUBMIT] METHOD 5: React event cascade');
+    if (!loginTriggered2) {
+      loginRequestFired = false;
+      console.log('  [SUBMIT] METHOD 5: React mousedown+mouseup+click cascade');
       await page.evaluate(() => {
         const btns = document.querySelectorAll('button');
         for (const btn of btns) {
           if (btn.textContent.toLowerCase().includes('login')) {
             ['mousedown', 'mouseup', 'click'].forEach(evt => {
-              btn.dispatchEvent(new MouseEvent(evt, {
-                view: window,
-                bubbles: true,
-                cancelable: true
-              }));
+              btn.dispatchEvent(new MouseEvent(evt, { view: window, bubbles: true, cancelable: true }));
             });
             break;
           }
         }
       });
-      
       await sleep(4000);
+      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
       const changed5 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') || 
+        return text.includes('verification') || text.includes('current balance') ||
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed5);
-      
-      if (changed5) {
-        console.log('  [SUCCESS] Method 5 worked!');
-        loginTriggered = true;
-      }
+      if (changed5) { loginTriggered2 = true; console.log('  [SUCCESS] Method 5 worked!'); }
     }
     
+    const loginTriggered = loginTriggered2;
     if (loginTriggered) {
       console.log('  [OK] Login triggered successfully');
     } else {
-      console.log('  [WARNING] No method triggered login, proceeding anyway...');
+      console.log('  [WARNING] No method triggered login - network fired:', loginRequestFired);
     }
     
     await sleep(1000);
