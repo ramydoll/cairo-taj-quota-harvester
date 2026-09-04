@@ -527,58 +527,111 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
-    // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
+    // NUCLEAR SUBMISSION - Try EVERY possible method until something works
     await sleep(1000);
-    const submitSuccess = await page.evaluate(() => {
-      // Step 1: Trigger validation on all inputs
+    
+    console.log('  [SUBMIT] METHOD 1: Button click with validation trigger');
+    const method1 = await page.evaluate(() => {
+      // Trigger validation on all inputs
       const inputs = document.querySelectorAll('input');
       inputs.forEach(inp => {
         inp.dispatchEvent(new Event('blur', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       });
       
-      // Step 2: Find the Login button (multiple strategies)
+      // Find Login button
       const btns = Array.from(document.querySelectorAll('button'));
-      let loginBtn = btns.find(b => 
-        b.textContent && b.textContent.toLowerCase().includes('login') ||
-        b.className && (b.className.includes('primary') || b.className.includes('submit'))
-      );
-      
-      // Fallback: look for button inside form
+      let loginBtn = btns.find(b => b.textContent && b.textContent.toLowerCase().includes('login'));
       if (!loginBtn) {
         const form = document.querySelector('form');
         if (form) loginBtn = form.querySelector('button[type="submit"], button.ant-btn-primary');
       }
-      
-      // Fallback: last button on page (usually Submit/Login)
       if (!loginBtn && btns.length > 0) loginBtn = btns[btns.length - 1];
       
-      if (!loginBtn) return { success: false, reason: 'No login button found' };
+      if (!loginBtn) return { success: false, reason: 'No button found' };
       
-      // Step 3: Ensure button is enabled
-      if (loginBtn.disabled) {
-        loginBtn.disabled = false;
-        loginBtn.classList.remove('ant-btn-disabled');
-      }
+      // Force enable and click
+      loginBtn.disabled = false;
+      loginBtn.classList.remove('ant-btn-disabled');
+      loginBtn.click();
+      loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       
-      // Step 4: Click the button (multiple methods)
-      try {
-        loginBtn.click(); // Native click
-        loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); // Synthetic click
-        return { success: true, buttonText: loginBtn.textContent.trim() };
-      } catch(e) {
-        return { success: false, reason: e.message };
-      }
+      return { success: true, buttonText: loginBtn.textContent.trim() };
+    });
+    console.log('    Result:', JSON.stringify(method1));
+    await sleep(2000); // Wait for React to process
+    
+    // Check if anything happened
+    let somethingChanged = await page.evaluate(() => {
+      return document.body.innerText.toLowerCase().includes('verification') ||
+             document.body.innerText.includes('Current Balance') ||
+             !!document.querySelector('.ant-modal');
     });
     
-    console.log('    [SUBMIT] Result:', JSON.stringify(submitSuccess));
-    
-    if (!submitSuccess.success) {
-      console.log('    [SUBMIT] Button click failed, trying Enter key fallback...');
+    if (!somethingChanged) {
+      console.log('  [SUBMIT] METHOD 2: Enter key on password field');
+      await page.focus('#login_password_input_01');
       await page.keyboard.press('Enter');
+      await sleep(2000);
+      
+      somethingChanged = await page.evaluate(() => {
+        return document.body.innerText.toLowerCase().includes('verification') ||
+               document.body.innerText.includes('Current Balance') ||
+               !!document.querySelector('.ant-modal');
+      });
     }
     
-    await sleep(6000);
+    if (!somethingChanged) {
+      console.log('  [SUBMIT] METHOD 3: Direct form.submit()');
+      await page.evaluate(() => {
+        const form = document.querySelector('form');
+        if (form && form.submit) {
+          form.submit();
+        }
+      });
+      await sleep(2000);
+      
+      somethingChanged = await page.evaluate(() => {
+        return document.body.innerText.toLowerCase().includes('verification') ||
+               document.body.innerText.includes('Current Balance') ||
+               !!document.querySelector('.ant-modal');
+      });
+    }
+    
+    if (!somethingChanged) {
+      console.log('  [SUBMIT] METHOD 4: Programmatic button click via coordinates');
+      const loginButton = await page.$('button:not([disabled])');
+      if (loginButton) {
+        await loginButton.click({ delay: 100 });
+        await sleep(2000);
+      }
+    }
+    
+    if (!somethingChanged) {
+      console.log('  [SUBMIT] METHOD 5: Force React form submission via __reactEventHandlers');
+      await page.evaluate(() => {
+        // Find all buttons and trigger their React onClick handlers
+        const buttons = document.querySelectorAll('button');
+        for (const btn of buttons) {
+          if (btn.textContent.toLowerCase().includes('login')) {
+            // Trigger ALL possible events
+            const events = ['mousedown', 'mouseup', 'click'];
+            events.forEach(eventType => {
+              btn.dispatchEvent(new MouseEvent(eventType, {
+                view: window,
+                bubbles: true,
+                cancelable: true
+              }));
+            });
+            break;
+          }
+        }
+      });
+      await sleep(2000);
+    }
+    
+    console.log('  [SUBMIT] All methods attempted, waiting for result...');
+    await sleep(2000); // Final wait for any delayed response
 
     // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
