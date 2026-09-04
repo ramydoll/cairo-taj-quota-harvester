@@ -11,7 +11,7 @@ const WE_PASSWORD = process.env.WE_PASSWORD;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_GROUP_ID = process.env.TELEGRAM_GROUP_ID; // Group chat for colleague
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 5;
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
