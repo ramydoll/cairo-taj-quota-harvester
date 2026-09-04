@@ -718,11 +718,8 @@ async function harvestQuota() {
     let loginTriggered = changed0;
     if (changed0) console.log('  [SUCCESS] Method 0 worked!');
 
-    // Get button handle fresh right before clicking
-    let loginTriggered2 = loginTriggered;
-    
     // METHOD 1: Real mouse click via Puppeteer
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       console.log('  [SUBMIT] METHOD 1: Real mouse click via Puppeteer');
       console.log('  [ANTI-BOT] Moving cursor to Login button...');
       
@@ -775,11 +772,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed1);
-      if (changed1) { loginTriggered2 = true; console.log('  [SUCCESS] Method 1 worked!'); }
+      if (changed1) { loginTriggered = true; console.log('  [SUCCESS] Method 1 worked!'); }
     }
     
     // METHOD 2: Enter key
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 2: Enter key on password field');
       await page.focus('#login_password_input_01');
@@ -793,11 +790,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed2);
-      if (changed2) { loginTriggered2 = true; console.log('  [SUCCESS] Method 2 worked!'); }
+      if (changed2) { loginTriggered = true; console.log('  [SUCCESS] Method 2 worked!'); }
     }
     
     // METHOD 3: form.submit()
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 3: form.submit()');
       await page.evaluate(() => {
@@ -812,11 +809,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed3);
-      if (changed3) { loginTriggered2 = true; console.log('  [SUCCESS] Method 3 worked!'); }
+      if (changed3) { loginTriggered = true; console.log('  [SUCCESS] Method 3 worked!'); }
     }
     
     // METHOD 4: Tab + Enter
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 4: Tab to button + Enter');
       await page.keyboard.press('Tab');
@@ -830,11 +827,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed4);
-      if (changed4) { loginTriggered2 = true; console.log('  [SUCCESS] Method 4 worked!'); }
+      if (changed4) { loginTriggered = true; console.log('  [SUCCESS] Method 4 worked!'); }
     }
     
     // METHOD 5: React event cascade
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 5: React mousedown+mouseup+click cascade');
       await page.evaluate(() => {
@@ -856,10 +853,9 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed5);
-      if (changed5) { loginTriggered2 = true; console.log('  [SUCCESS] Method 5 worked!'); }
+      if (changed5) { loginTriggered = true; console.log('  [SUCCESS] Method 5 worked!'); }
     }
     
-    const loginTriggered = loginTriggered2;
     if (loginTriggered) {
       console.log('  [OK] Login triggered successfully');
     } else {
@@ -932,8 +928,8 @@ async function harvestQuota() {
         // Block message detection
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') || text.includes('try again') ||
-                          text.includes('blocked') || text.includes('ãÍÇæáÇÊ') ||
-                          text.includes('ÇáÍÏ ÇáÇÞÕì') || text.includes('ãÑå ÇÎÑì');
+                          text.includes('blocked') || text.includes('ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½') ||
+                          text.includes('ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½') || text.includes('ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½');
         
         // Dashboard success indicators (even if URL didn't change - SPA navigation)
         const hasDashboard = fullText.includes('Current Balance') || 
@@ -960,7 +956,7 @@ async function harvestQuota() {
         return { hasCaptcha, isBlocked, hasDashboard, stillOnLogin, text: text.slice(0, 200), debugInfo };
       });
 
-      // VERBOSE LOGGING - Every 1 second (10 ticks × 100ms)
+      // VERBOSE LOGGING - Every 1 second (10 ticks ï¿½ 100ms)
       if (tick % 10 === 0) {
         const elapsed = (tick * 0.1).toFixed(1);
         console.log(`  [DEBUG ${elapsed}s] cap:${pageState.hasCaptcha} dash:${pageState.hasDashboard} login:${pageState.stillOnLogin} block:${pageState.isBlocked} | modals:${pageState.debugInfo.modalCount} btns:${pageState.debugInfo.buttonCount}`);
@@ -1004,7 +1000,7 @@ async function harvestQuota() {
       await sleep(100);
     }
 
-    // Handle blocked state — don't throw immediately, note it but try extraction anyway
+    // Handle blocked state ï¿½ don't throw immediately, note it but try extraction anyway
     // (Block message might be stale from previous run)
     if (postLoginState === 'blocked') {
       console.log('  ??  Block message detected, but will attempt extraction anyway (might be stale)');
@@ -1054,7 +1050,7 @@ async function harvestQuota() {
 
       // HELPER: Find the captcha image (largest img inside modal)
       // Accepts image even if naturalWidth===0 (lazy-load / slow server) as long as
-      // the element has visible dimensions — prevents "No valid captcha image" loops.
+      // the element has visible dimensions ï¿½ prevents "No valid captcha image" loops.
       async function findCaptchaImg() {
         return await page.evaluateHandle(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
@@ -1078,7 +1074,7 @@ async function harvestQuota() {
         });
       }
 
-      // HELPER: Canvas preprocessing — 18 filter modes for WE captcha
+      // HELPER: Canvas preprocessing ï¿½ 18 filter modes for WE captcha
       async function canvasProcess(imgHandle, filter) {
         return await page.evaluate((imgEl, f) => {
           if (!imgEl) return null;
@@ -1130,7 +1126,7 @@ async function harvestQuota() {
         }, imgHandle, filter);
       }
 
-      // HELPER: OCR with dual PSM modes — returns only results >= 5 chars
+      // HELPER: OCR with dual PSM modes ï¿½ returns only results >= 5 chars
       async function ocrRead(imageData) {
         const Tesseract = require('tesseract.js');
         const results = [];
@@ -1169,7 +1165,7 @@ async function harvestQuota() {
           setter.call(inp, ans);
           inp.dispatchEvent(new Event('input', { bubbles: true }));
           inp.dispatchEvent(new Event('change', { bubbles: true }));
-          // Find the OK/confirm button — NOT Cancel. Look for button with ok/confirm text,
+          // Find the OK/confirm button ï¿½ NOT Cancel. Look for button with ok/confirm text,
           // or ant-btn-primary class, or the LAST button (Cancel is usually first, Ok is last)
           const allBtns = Array.from(modal.querySelectorAll('button'));
           const btn = allBtns.find(b => /ok|confirm|submit/i.test(b.textContent)) ||
@@ -1199,7 +1195,7 @@ async function harvestQuota() {
         });
       }
 
-      // HELPER: Re-trigger captcha — full page reload + fresh login
+      // HELPER: Re-trigger captcha ï¿½ full page reload + fresh login
       // (old button-click approach is unreliable after WE resets form state)
       async function doFullReLogin() {
         console.log('    [RETRIGGER] Full page reload + re-login...');
@@ -1274,7 +1270,7 @@ async function harvestQuota() {
         'rBoost','gBoost','satBoost'
       ];
 
-      // Normalize OCR result for vote grouping — collapses common OCR confusion chars
+      // Normalize OCR result for vote grouping ï¿½ collapses common OCR confusion chars
       function normalizeOCR(str) {
         return str.toUpperCase()
           .replace(/0/g, 'O')
@@ -1395,7 +1391,7 @@ async function harvestQuota() {
             console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / voted=' + filtersVoted + ')');
 
             if (confidence >= 80 || ocrAttempt >= 3) {
-              console.log('    [OCR] Confidence acceptable or max refreshes reached — proceeding to submit');
+              console.log('    [OCR] Confidence acceptable or max refreshes reached ï¿½ proceeding to submit');
               break;
             } else {
               console.log('    [OCR] Confidence < 80%, will refresh captcha image');
@@ -1469,7 +1465,7 @@ async function harvestQuota() {
       let dashboardReached = false;
       let interstitialPageDetected = false;
       
-      for (let tick = 0; tick < 300; tick++) { // 30 seconds max (300 × 100ms)
+      for (let tick = 0; tick < 300; tick++) { // 30 seconds max (300 ï¿½ 100ms)
         const currentUrl = page.url();
         
         // Check page state
@@ -1599,13 +1595,13 @@ async function harvestQuota() {
       const newUrl = page.url();
       console.log('  [NAVIGATE] New URL:', newUrl);
       if (newUrl.includes('login')) {
-        throw new Error('WE forced redirect to login after navigation — possible session block');
+        throw new Error('WE forced redirect to login after navigation ï¿½ possible session block');
       }
     }
 
     // CRITICAL: The WE portal does a session refresh after line switch that can
     // redirect back to #/login within seconds. The only reliable approach is to
-    // extract the data THE MOMENT we confirm the correct page is showing —
+    // extract the data THE MOMENT we confirm the correct page is showing ï¿½
     // before the redirect can happen. We capture data inside the switcher itself.
 
     // Helper: extract all quota data from the current page state
@@ -1758,7 +1754,7 @@ async function harvestQuota() {
         if (!clicked) throw new Error('Option 0237600094 not found');
         console.log('    Clicked:', clicked);
 
-        // Poll aggressively — capture data THE MOMENT the page shows 0237600094 AND full data loaded
+        // Poll aggressively ï¿½ capture data THE MOMENT the page shows 0237600094 AND full data loaded
         for (let w = 0; w < 30; w++) {
           await sleep(1000);
           const url = page.url();
@@ -1784,13 +1780,13 @@ async function harvestQuota() {
                 console.log('    ? M1 FULL DATA CAPTURED: remaining=' + captured.remaining + ' used=' + captured.used + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance + ' plan=' + captured.plan);
                 return; // SUCCESS
               } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093), waiting for 094...');
+                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 ï¿½ WRONG LINE (093), waiting for 094...');
               } else if (captured.balance === 0) {
                 console.log('    ? (' + (w+1) + 's) Balance=0, page still loading... rem=' + captured.remaining);
               } else if (captured.plan === 'Unknown') {
                 console.log('    ? (' + (w+1) + 's) Plan=Unknown, page still rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
               } else if (totalGB <= 300) {
-                console.log('    ? (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094?) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) — waiting for full 094 data...');
+                console.log('    ? (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094?) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) ï¿½ waiting for full 094 data...');
               } else {
                 console.log('    ? (' + (w+1) + 's) Data incomplete, waiting... rem=' + captured.remaining + ' bal=' + captured.balance + ' total=' + totalGB.toFixed(1));
               }
@@ -1840,7 +1836,7 @@ async function harvestQuota() {
                 console.log('    ? M2 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
                 return;
               } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
+                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 ï¿½ WRONG LINE (093)');
               } else if (captured.balance === 0) {
                 console.log('    ? (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
               } else if (captured.plan === 'Unknown') {
@@ -1877,7 +1873,7 @@ async function harvestQuota() {
                 console.log('    ? M3 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
                 return;
               } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
+                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 ï¿½ WRONG LINE (093)');
               } else if (captured.balance === 0) {
                 console.log('    ? (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
               } else if (captured.plan === 'Unknown') {
@@ -1923,7 +1919,7 @@ async function harvestQuota() {
       console.log('    Pre-captured during line switch');
       data = switcherCapturedData;
     } else {
-      // Switcher didn't capture data — do persistent extraction with 7 cycles
+      // Switcher didn't capture data ï¿½ do persistent extraction with 7 cycles
       const MAX_EXTRACTION_CYCLES = 7;
       
       for (let cycle = 1; cycle <= MAX_EXTRACTION_CYCLES; cycle++) {
@@ -1977,7 +1973,7 @@ async function harvestQuota() {
           }
           
           data = await tryMethods([
-            // M1: Walk ALL spans/divs — numeric sibling scan
+            // M1: Walk ALL spans/divs ï¿½ numeric sibling scan
             async () => {
               await sleep(2000);
               const result = await page.evaluate(() => {
@@ -2223,15 +2219,15 @@ async function harvestQuota() {
       // Quota alert level
       const rem = data.remaining;
       let alertLine = '';
-      if (rem < 30)       alertLine = '\n?? *CRITICAL — Under 30 GB! Recharge immediately!*';
-      else if (rem < 50)  alertLine = '\n?? *CRITICAL — Under 50 GB!*';
-      else if (rem < 100) alertLine = '\n?? *WARNING — Under 100 GB*';
+      if (rem < 30)       alertLine = '\n?? *CRITICAL ï¿½ Under 30 GB! Recharge immediately!*';
+      else if (rem < 50)  alertLine = '\n?? *CRITICAL ï¿½ Under 50 GB!*';
+      else if (rem < 100) alertLine = '\n?? *WARNING ï¿½ Under 100 GB*';
 
       // Status icon based on level
       const statusIcon = rem < 50 ? '??' : rem < 100 ? '??' : '?';
 
       const msg = [
-        '?? *Cairo Taj — Dokki Harvest*',
+        '?? *Cairo Taj ï¿½ Dokki Harvest*',
         '',
         `${statusIcon} Quota Remaining: *${rem.toFixed(2)} GB*`,
         `?? Used: *${data.used.toFixed(2)} GB*`,
@@ -2261,10 +2257,10 @@ async function harvestQuota() {
       if (!tgSuccess) throw new Error('All Telegram sends failed');
       console.log('  ? Telegram sent!\n');
 
-      // CRITICAL ALERT: Under 30 GB — send a separate urgent message
+      // CRITICAL ALERT: Under 30 GB ï¿½ send a separate urgent message
       if (rem < 30) {
         const criticalMsg = {
-          text: ['?????? *CRITICAL QUOTA ALERT* ??????', '', '?? *Cairo Taj — Dokki*',
+          text: ['?????? *CRITICAL QUOTA ALERT* ??????', '', '?? *Cairo Taj ï¿½ Dokki*',
             `?? Only *${rem.toFixed(2)} GB* remaining!`, '?? *ACTION REQUIRED: Recharge immediately!*', '', `?? ${date}`].join('\n'),
           parse_mode: 'Markdown',
           disable_notification: false
@@ -2286,13 +2282,13 @@ async function harvestQuota() {
     console.log('????????????????????????????????????????');
 
     // ??????????????????????????????????????????????????????????????
-    // VIGILANCE MODE — triggered when quota ? 50 GB (Dokki)
+    // VIGILANCE MODE ï¿½ triggered when quota ? 50 GB (Dokki)
     // Stays in same session, refreshes every 13 minutes, harvests
     // until quota ? 2 GB or session dies (then restarts + re-switches line).
-    // Only sends Telegram for Dokki — other line unaffected.
+    // Only sends Telegram for Dokki ï¿½ other line unaffected.
     // ??????????????????????????????????????????????????????????????
     if (data.remaining <= 50) {
-      console.log('\n?? VIGILANCE MODE ACTIVATED (DOKKI) — quota=' + data.remaining.toFixed(2) + ' GB ? 50 GB');
+      console.log('\n?? VIGILANCE MODE ACTIVATED (DOKKI) ï¿½ quota=' + data.remaining.toFixed(2) + ' GB ? 50 GB');
       console.log('  Will harvest every 13 min until quota ? 2 GB or job time limit reached.\n');
 
       const VIGILANCE_INTERVAL_MS = 13 * 60 * 1000;
@@ -2391,13 +2387,13 @@ async function harvestQuota() {
             year: 'numeric', hour: '2-digit', minute: '2-digit'
           });
           const icon = rem <= 2 ? '??' : rem <= 10 ? '??' : rem <= 20 ? '??' : '??';
-          const urgency = rem <= 2  ? '?? *STOP — 2 GB REACHED! Recharge NOW!*' :
-                          rem <= 5  ? '?? *CRITICAL — Under 5 GB!*' :
-                          rem <= 10 ? '?? *CRITICAL — Under 10 GB! Recharge soon!*' :
-                          rem <= 20 ? '?? *WARNING — Under 20 GB*' :
-                          rem <= 30 ? '?? *NOTICE — Under 30 GB*' : '';
+          const urgency = rem <= 2  ? '?? *STOP ï¿½ 2 GB REACHED! Recharge NOW!*' :
+                          rem <= 5  ? '?? *CRITICAL ï¿½ Under 5 GB!*' :
+                          rem <= 10 ? '?? *CRITICAL ï¿½ Under 10 GB! Recharge soon!*' :
+                          rem <= 20 ? '?? *WARNING ï¿½ Under 20 GB*' :
+                          rem <= 30 ? '?? *NOTICE ï¿½ Under 30 GB*' : '';
           const msg = [
-            '? *Cairo Taj — Dokki [VIGILANCE MODE]*',
+            '? *Cairo Taj ï¿½ Dokki [VIGILANCE MODE]*',
             '',
             icon + ' Quota: *' + rem.toFixed(2) + ' GB* remaining',
             '?? Used: *' + vData.used.toFixed(2) + ' GB*',
@@ -2418,7 +2414,7 @@ async function harvestQuota() {
           }
           if (rem <= 10) {
             const critMsg = {
-              text: ['?????? *VIGILANCE CRITICAL* ??????', '', '?? *Cairo Taj — Dokki*',
+              text: ['?????? *VIGILANCE CRITICAL* ??????', '', '?? *Cairo Taj ï¿½ Dokki*',
                 '?? Only *' + rem.toFixed(2) + ' GB* remaining!',
                 '?? *ACTION REQUIRED: Recharge immediately!*', '', '?? ' + date].join('\n'),
               parse_mode: 'Markdown', disable_notification: false
@@ -2435,7 +2431,7 @@ async function harvestQuota() {
 
       // ?? Helper: full re-login + re-switch to 094 when session dies ??
       async function vigilanceRestartSession() {
-        console.log('  [VIGILANCE] Session died — restarting fresh session...');
+        console.log('  [VIGILANCE] Session died ï¿½ restarting fresh session...');
         try { await browser.close(); } catch(e) {}
         browser = await puppeteer.launch({
           headless: true, executablePath: '/usr/bin/google-chrome-stable',
@@ -2520,7 +2516,7 @@ async function harvestQuota() {
       while (true) {
         const elapsed = Date.now() - vigilanceStart;
         if (elapsed >= VIGILANCE_MAX_MS) {
-          console.log('\n[VIGILANCE] 5h 45m safety cap reached — stopping vigilance mode.');
+          console.log('\n[VIGILANCE] 5h 45m safety cap reached ï¿½ stopping vigilance mode.');
           break;
         }
         console.log('\n[VIGILANCE] Waiting 13 minutes for next harvest...');
@@ -2529,7 +2525,7 @@ async function harvestQuota() {
         vigilanceRound++;
         const elapsedMin = Math.floor((Date.now() - vigilanceStart) / 60000);
         console.log('\n' + '?'.repeat(50));
-        console.log('? VIGILANCE ROUND #' + vigilanceRound + ' — DOKKI (' + elapsedMin + 'min elapsed)');
+        console.log('? VIGILANCE ROUND #' + vigilanceRound + ' ï¿½ DOKKI (' + elapsedMin + 'min elapsed)');
         console.log('?'.repeat(50));
 
         try {
@@ -2557,7 +2553,7 @@ async function harvestQuota() {
           lastRemaining = vData.remaining;
 
           if (vData.remaining <= VIGILANCE_STOP_GB) {
-            console.log('\n?? [VIGILANCE] Quota reached ' + vData.remaining.toFixed(2) + ' GB — STOP THRESHOLD HIT.');
+            console.log('\n?? [VIGILANCE] Quota reached ' + vData.remaining.toFixed(2) + ' GB ï¿½ STOP THRESHOLD HIT.');
             console.log('  Vigilance mode complete. Awaiting manual recharge.');
             break;
           }
@@ -2565,12 +2561,12 @@ async function harvestQuota() {
         } catch (vErr) {
           console.log('  [VIGILANCE] Round #' + vigilanceRound + ' error: ' + vErr.message);
           if (vErr.message.includes('SESSION_DIED') || vErr.message.includes('redirected to login') || vErr.message.includes('ALL METHODS FAILED')) {
-            console.log('  [VIGILANCE] Session dead — attempting restart...');
+            console.log('  [VIGILANCE] Session dead ï¿½ attempting restart...');
             try {
               await vigilanceRestartSession();
               console.log('  [VIGILANCE] Session restarted. Will retry on next round.');
             } catch (restartErr) {
-              console.log('  [VIGILANCE] Restart failed: ' + restartErr.message + ' — stopping vigilance.');
+              console.log('  [VIGILANCE] Restart failed: ' + restartErr.message + ' ï¿½ stopping vigilance.');
               break;
             }
           } else {
@@ -2612,7 +2608,7 @@ async function main() {
     } catch (error) {
       console.error(`\nAttempt ${attempt} failed: ${error.message}`);
       if (error.message && error.message.includes('WE_BLOCKED')) {
-        console.error('? WE block detected — stopping all retries to avoid extending the block');
+        console.error('? WE block detected ï¿½ stopping all retries to avoid extending the block');
         console.error('?? Will retry on next scheduled run automatically');
         process.exit(1);
       }
