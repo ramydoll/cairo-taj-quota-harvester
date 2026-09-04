@@ -481,8 +481,8 @@ async function harvestQuota() {
 
     console.log('  [OK] Dropdown done\n');
 
-    // Human-like pause before password
-    const delay3 = randomDelay(5000, 8000);
+    // Human-like pause before password (REDUCED to beat form timeout)
+    const delay3 = randomDelay(2000, 3000); // Was 5-8s, now 2-3s
     console.log('  [HUMAN] pause', delay3, 'ms');
     await sleep(delay3);
 
@@ -545,9 +545,34 @@ async function harvestQuota() {
     ], 'PASSWORD', 60000);
 
     console.log('  [OK] Password done\n');
+    
+    // RE-VERIFY DROPDOWN AFTER PASSWORD (critical fix!)
+    await sleep(500);
+    console.log('  [RE-VERIFY] Checking dropdown still selected after password...');
+    const dropdownRecheck = await page.evaluate(() => {
+      const selector = document.querySelector('.ant-select-selection-item');
+      const text = selector ? selector.textContent.trim() : null;
+      return { selected: text, isInternet: text?.toLowerCase().includes('internet') };
+    });
+    console.log('    Dropdown state:', JSON.stringify(dropdownRecheck));
+    
+    if (!dropdownRecheck.isInternet) {
+      console.log('  [FIX] Dropdown lost after password! Re-selecting Internet...');
+      await page.click('.ant-select-selector');
+      await sleep(800);
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
+        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
+        if (internet) internet.click();
+      });
+      await sleep(800);
+      console.log('  [OK] Dropdown re-selected');
+    } else {
+      console.log('  [OK] Dropdown still valid');
+    }
 
-    // Human-like pause before submit
-    const delay4 = randomDelay(5000, 8000);
+    // Human-like pause before submit (REDUCED to beat timeout)
+    const delay4 = randomDelay(2000, 3000); // Was 5-8s, now 2-3s
     console.log('  [HUMAN] pause', delay4, 'ms');
     await sleep(delay4);
 
@@ -555,10 +580,44 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
-    // WAIT FOR LOGIN BUTTON TO BE ENABLED (form validation passed)
-    console.log('  [WAIT] Waiting for Login button to become enabled...');
+    // FINAL DROPDOWN + FORM STATE CHECK
+    console.log('  [FINAL CHECK] Verifying form ready for submission...');
+    const formReady = await page.evaluate(() => {
+      const serviceNum = document.querySelector('#login_loginid_input_01')?.value;
+      const dropdown = document.querySelector('.ant-select-selection-item')?.textContent?.trim();
+      const password = document.querySelector('#login_password_input_01')?.value;
+      const loginBtn = Array.from(document.querySelectorAll('button')).find(b => 
+        b.textContent.toLowerCase().includes('login')
+      );
+      
+      return {
+        hasService: !!serviceNum,
+        dropdown: dropdown,
+        hasPassword: !!password,
+        buttonDisabled: loginBtn?.disabled,
+        buttonText: loginBtn?.textContent?.trim()
+      };
+    });
+    console.log('    Form state:', JSON.stringify(formReady));
+    
+    // If dropdown not selected, fix it NOW
+    if (!formReady.dropdown || formReady.dropdown === 'Select Type') {
+      console.log('  [CRITICAL] Dropdown not selected! Fixing...');
+      await page.click('.ant-select-selector');
+      await sleep(800);
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
+        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
+        if (internet) internet.click();
+      });
+      await sleep(1500);
+      console.log('  [OK] Dropdown fixed');
+    }
+    
+    // Wait for button to be enabled (with timeout)
+    console.log('  [WAIT] Waiting for Login button to be enabled...');
     let buttonEnabled = false;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 8; i++) { // Max 8 seconds
       const btnState = await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
         const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
@@ -566,41 +625,19 @@ async function harvestQuota() {
       });
       
       if (btnState && !btnState.disabled) {
-        console.log(`  [OK] Button enabled after ${i}s:`, btnState.text);
+        console.log(`  [OK] Button enabled after ${i}s`);
         buttonEnabled = true;
         break;
       }
       
-      if (i % 2 === 0) {
-        console.log(`    Waiting... ${i}s (button still disabled)`);
+      if (i % 2 === 0 && i > 0) {
+        console.log(`    Still waiting... ${i}s`);
       }
       await sleep(1000);
     }
     
     if (!buttonEnabled) {
-      console.log('  [WARNING] Button still disabled after 10s, checking form state...');
-      const formState = await page.evaluate(() => {
-        const serviceNum = document.querySelector('#login_loginid_input_01')?.value;
-        const dropdown = document.querySelector('.ant-select-selection-item')?.textContent;
-        const password = document.querySelector('#login_password_input_01')?.value;
-        return { serviceNum: serviceNum?.slice(0,4) + '***', dropdown, password: password ? '***' : null };
-      });
-      console.log('    Form state:', JSON.stringify(formState));
-      
-      // If dropdown not selected, try again
-      if (!formState.dropdown || formState.dropdown === 'Select Type') {
-        console.log('  [FIX] Dropdown not selected! Re-clicking Internet...');
-        await page.click('.ant-select-selector');
-        await sleep(1000);
-        await page.evaluate(() => {
-          const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
-          const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
-          if (internet) internet.click();
-        });
-        await sleep(2000);
-      }
-      
-      // Force enable button
+      console.log('  [FORCE] Button still disabled, forcing enable...');
       await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
         const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
@@ -609,109 +646,126 @@ async function harvestQuota() {
           loginBtn.classList.remove('ant-btn-disabled');
         }
       });
-      console.log('  [FORCE] Enabled button manually');
     }
     
-    await sleep(1000);
+    await sleep(500);
     
-    // PROGRESSIVE SUBMISSION - Try methods with delays, check after each
-    console.log('  [SUBMIT] METHOD 1: Button click with validation trigger');
-    const method1 = await page.evaluate(() => {
-      // Trigger validation
-      const inputs = document.querySelectorAll('input');
-      inputs.forEach(inp => {
-        inp.dispatchEvent(new Event('blur', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
+    // PROGRESSIVE SUBMISSION - Try ONE method at a time, wait for response
+    let loginTriggered = false;
+    
+    // METHOD 1: Standard button click
+    if (!loginTriggered) {
+      console.log('  [SUBMIT] METHOD 1: Button click with validation');
+      const result1 = await page.evaluate(() => {
+        // Trigger validation
+        const inputs = document.querySelectorAll('input');
+        inputs.forEach(inp => {
+          inp.dispatchEvent(new Event('blur', { bubbles: true }));
+          inp.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        
+        // Click button
+        const btns = Array.from(document.querySelectorAll('button'));
+        const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
+        
+        if (!loginBtn) return { success: false, reason: 'No button' };
+        
+        loginBtn.disabled = false;
+        loginBtn.click();
+        
+        return { success: true, text: loginBtn.textContent.trim() };
       });
+      console.log('    Result:', JSON.stringify(result1));
       
-      // Click button
-      const btns = Array.from(document.querySelectorAll('button'));
-      let loginBtn = btns.find(b => b.textContent && b.textContent.toLowerCase().includes('login'));
-      if (!loginBtn) {
-        const form = document.querySelector('form');
-        if (form) loginBtn = form.querySelector('button[type="submit"], button.ant-btn-primary');
+      // Wait 4 seconds and check if something happened
+      await sleep(4000);
+      const changed1 = await page.evaluate(() => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('verification') || text.includes('current balance') || 
+               text.includes('remaining') || !!document.querySelector('.ant-modal') ||
+               !text.includes('service number'); // Navigated away from login
+      });
+      console.log('    Page changed:', changed1);
+      
+      if (changed1) {
+        console.log('  [SUCCESS] Method 1 worked!');
+        loginTriggered = true;
       }
-      if (!loginBtn && btns.length > 0) loginBtn = btns[btns.length - 1];
-      
-      if (!loginBtn) return { success: false, reason: 'No button found' };
-      
-      loginBtn.disabled = false;
-      loginBtn.classList.remove('ant-btn-disabled');
-      loginBtn.click();
-      loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      
-      return { success: true, buttonText: loginBtn.textContent.trim() };
-    });
-    console.log('    Result:', JSON.stringify(method1));
+    }
     
-    // Wait and check if something changed
-    await sleep(3000);
-    let somethingChanged = await page.evaluate(() => {
-      const text = document.body.innerText.toLowerCase();
-      return text.includes('verification') ||
-             text.includes('current balance') ||
-             text.includes('remaining') ||
-             !!document.querySelector('.ant-modal');
-    });
-    console.log('    Changed:', somethingChanged);
-    
-    if (!somethingChanged) {
+    // METHOD 2: Enter key
+    if (!loginTriggered) {
       console.log('  [SUBMIT] METHOD 2: Enter key on password field');
       await page.focus('#login_password_input_01');
+      await sleep(300);
       await page.keyboard.press('Enter');
-      await sleep(3000);
       
-      somethingChanged = await page.evaluate(() => {
+      await sleep(4000);
+      const changed2 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') ||
-               text.includes('current balance') ||
-               !!document.querySelector('.ant-modal');
+        return text.includes('verification') || text.includes('current balance') || 
+               !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
-      console.log('    Changed:', somethingChanged);
+      console.log('    Page changed:', changed2);
+      
+      if (changed2) {
+        console.log('  [SUCCESS] Method 2 worked!');
+        loginTriggered = true;
+      }
     }
     
-    if (!somethingChanged) {
+    // METHOD 3: form.submit()
+    if (!loginTriggered) {
       console.log('  [SUBMIT] METHOD 3: Direct form.submit()');
       await page.evaluate(() => {
         const form = document.querySelector('form');
         if (form && form.submit) form.submit();
       });
-      await sleep(3000);
       
-      somethingChanged = await page.evaluate(() => {
+      await sleep(4000);
+      const changed3 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') ||
-               text.includes('current balance') ||
-               !!document.querySelector('.ant-modal');
+        return text.includes('verification') || text.includes('current balance') || 
+               !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
-      console.log('    Changed:', somethingChanged);
+      console.log('    Page changed:', changed3);
+      
+      if (changed3) {
+        console.log('  [SUCCESS] Method 3 worked!');
+        loginTriggered = true;
+      }
     }
     
-    if (!somethingChanged) {
+    // METHOD 4: Tab + Enter
+    if (!loginTriggered) {
       console.log('  [SUBMIT] METHOD 4: Tab to button + Enter');
       await page.keyboard.press('Tab');
-      await sleep(500);
+      await sleep(300);
       await page.keyboard.press('Enter');
-      await sleep(3000);
       
-      somethingChanged = await page.evaluate(() => {
+      await sleep(4000);
+      const changed4 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') ||
-               text.includes('current balance') ||
-               !!document.querySelector('.ant-modal');
+        return text.includes('verification') || text.includes('current balance') || 
+               !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
-      console.log('    Changed:', somethingChanged);
+      console.log('    Page changed:', changed4);
+      
+      if (changed4) {
+        console.log('  [SUCCESS] Method 4 worked!');
+        loginTriggered = true;
+      }
     }
     
-    if (!somethingChanged) {
-      console.log('  [SUBMIT] METHOD 5: Force React event cascade');
+    // METHOD 5: React event cascade
+    if (!loginTriggered) {
+      console.log('  [SUBMIT] METHOD 5: React event cascade');
       await page.evaluate(() => {
-        const buttons = document.querySelectorAll('button');
-        for (const btn of buttons) {
+        const btns = document.querySelectorAll('button');
+        for (const btn of btns) {
           if (btn.textContent.toLowerCase().includes('login')) {
-            const events = ['mousedown', 'mouseup', 'click'];
-            events.forEach(eventType => {
-              btn.dispatchEvent(new MouseEvent(eventType, {
+            ['mousedown', 'mouseup', 'click'].forEach(evt => {
+              btn.dispatchEvent(new MouseEvent(evt, {
                 view: window,
                 bubbles: true,
                 cancelable: true
@@ -721,11 +775,28 @@ async function harvestQuota() {
           }
         }
       });
-      await sleep(3000);
+      
+      await sleep(4000);
+      const changed5 = await page.evaluate(() => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('verification') || text.includes('current balance') || 
+               !!document.querySelector('.ant-modal') || !text.includes('service number');
+      });
+      console.log('    Page changed:', changed5);
+      
+      if (changed5) {
+        console.log('  [SUCCESS] Method 5 worked!');
+        loginTriggered = true;
+      }
     }
     
-    console.log('  [SUBMIT] All methods attempted, final wait...');
-    await sleep(2000);
+    if (loginTriggered) {
+      console.log('  [OK] Login triggered successfully');
+    } else {
+      console.log('  [WARNING] No method triggered login, proceeding anyway...');
+    }
+    
+    await sleep(1000);
 
     // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
