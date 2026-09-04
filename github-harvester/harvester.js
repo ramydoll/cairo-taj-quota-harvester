@@ -1141,19 +1141,61 @@ async function harvestQuota() {
       console.log('  [POST-CAPTCHA] Waiting for dashboard navigation...');
       
       let dashboardReached = false;
+      let interstitialPageDetected = false;
+      
       for (let tick = 0; tick < 300; tick++) { // 30 seconds max (300 × 100ms)
         const currentUrl = page.url();
         
-        // Check if redirected back to login (login failed)
+        // Check page state
         const pageCheck = await page.evaluate(() => {
           const text = document.body.innerText;
+          const url = window.location.href;
           const hasLoginForm = !!document.querySelector('#login_loginid_input_01');
           const hasDashboard = text.includes('Current Balance') || 
                                text.includes('Remaining') ||
                                text.includes('Used') ||
                                !!document.querySelector('[class*="balance"]');
-          return { hasLoginForm, hasDashboard };
+          
+          // Detect interstitial/promo pages (anonymoustopup, promotions, ads, etc.)
+          const isInterstitial = url.includes('anonymoustopup') || 
+                                 url.includes('promotion') ||
+                                 url.includes('offer') ||
+                                 url.includes('topup') ||
+                                 (url.includes('echannel') && !url.includes('login') && !hasDashboard);
+          
+          return { hasLoginForm, hasDashboard, isInterstitial, url };
         });
+        
+        // Interstitial page detected (e.g. /anonymoustopup) - navigate to dashboard
+        if (pageCheck.isInterstitial && !interstitialPageDetected) {
+          interstitialPageDetected = true;
+          const waitTime = (tick * 0.1).toFixed(1);
+          console.log(`  ⚠️  Interstitial page detected after ${waitTime}s: ${pageCheck.url}`);
+          console.log('  → Navigating to dashboard...');
+          
+          // Try multiple navigation strategies
+          await page.evaluate(() => {
+            // Strategy 1: Click any "Skip" / "Close" / "Continue" buttons
+            const btns = Array.from(document.querySelectorAll('button, a'));
+            const skipBtn = btns.find(b => {
+              const txt = b.textContent?.toLowerCase() || '';
+              return txt.includes('skip') || txt.includes('close') || txt.includes('continue') || 
+                     txt.includes('later') || txt.includes('cancel') || txt.includes('×');
+            });
+            if (skipBtn) {
+              skipBtn.click();
+              return;
+            }
+            
+            // Strategy 2: Navigate to home/dashboard via URL
+            if (window.location.hash) {
+              window.location.hash = '#/home';
+            }
+          }).catch(() => {});
+          
+          await sleep(2000);
+          continue; // Re-check page state
+        }
         
         // Success: Dashboard loaded
         if (pageCheck.hasDashboard && !pageCheck.hasLoginForm) {
@@ -1179,7 +1221,8 @@ async function harvestQuota() {
       }
       
       if (!dashboardReached) {
-        throw new Error('Dashboard did not load within 30s after CAPTCHA solve');
+        const finalUrl = page.url();
+        throw new Error(`Dashboard did not load within 30s after CAPTCHA solve. Final URL: ${finalUrl}`);
       }
     }
 
