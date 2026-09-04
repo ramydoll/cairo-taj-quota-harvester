@@ -368,6 +368,10 @@ async function harvestQuota() {
     const delay2 = randomDelay(5000, 8000);
     console.log('  [HUMAN] pause', delay2, 'ms');
     await sleep(delay2);
+    
+    // CRITICAL FIX: WE validates service number server-side before enabling dropdown
+    console.log('  [WAIT] Waiting for WE server to validate service number...');
+    await sleep(3000); // Server validation delay - CRITICAL!
 
     // Wait for dropdown to appear after username triggers React re-render
     console.log('  Waiting for dropdown to appear...');
@@ -475,7 +479,12 @@ async function harvestQuota() {
       await sleep(1000);
     }
 
-    console.log('  [OK] Dropdown done\n');
+    console.log('  [OK] Dropdown done');
+    
+    // CRITICAL FIX: Wait for React to propagate dropdown selection to form state
+    console.log('  [WAIT] Waiting for React form state to update...');
+    await sleep(2500); // React state propagation delay - CRITICAL!
+    console.log('  [OK] Form state updated\n');
 
     // Human-like pause before password (REDUCED to beat form timeout)
     const delay3 = randomDelay(2000, 3000); // Was 5-8s, now 2-3s
@@ -647,39 +656,61 @@ async function harvestQuota() {
     await sleep(500);
     
     // PROGRESSIVE SUBMISSION - Try ONE method at a time, wait for response
+    // ULTIMATE ANTI-BOT BYPASS: Mouse movement + Real Puppeteer click
+    console.log('  [ANTI-BOT] Preparing human-like submission...');
+    
+    // Get Login button element handle
+    const loginButtonHandle = await page.evaluateHandle(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      return btns.find(b => b.textContent.toLowerCase().includes('login'));
+    });
+    
+    if (!loginButtonHandle || !loginButtonHandle.asElement()) {
+      throw new Error('Login button not found');
+    }
+    
+    // Get button coordinates for mouse movement
+    const buttonBox = await loginButtonHandle.asElement().boundingBox();
+    
+    if (buttonBox) {
+      console.log('  [MOUSE] Moving cursor to Login button...');
+      const targetX = buttonBox.x + buttonBox.width / 2;
+      const targetY = buttonBox.y + buttonBox.height / 2;
+      await page.mouse.move(targetX, targetY, { steps: 15 });
+      await sleep(800);
+      console.log('  [MOUSE] Cursor positioned');
+    }
+    
+    // Trigger form validation
+    console.log('  [VALIDATE] Triggering form validation events...');
+    await page.evaluate(() => {
+      const inputs = document.querySelectorAll('input, .ant-select');
+      inputs.forEach(inp => {
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    });
+    await sleep(500);
+    
     let loginTriggered = false;
     
-    // METHOD 1: Standard button click
+    // METHOD 1: Real Puppeteer click
     if (!loginTriggered) {
-      console.log('  [SUBMIT] METHOD 1: Button click with validation');
-      const result1 = await page.evaluate(() => {
-        // Trigger validation
-        const inputs = document.querySelectorAll('input');
-        inputs.forEach(inp => {
-          inp.dispatchEvent(new Event('blur', { bubbles: true }));
-          inp.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        
-        // Click button
-        const btns = Array.from(document.querySelectorAll('button'));
-        const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
-        
-        if (!loginBtn) return { success: false, reason: 'No button' };
-        
-        loginBtn.disabled = false;
-        loginBtn.click();
-        
-        return { success: true, text: loginBtn.textContent.trim() };
-      });
-      console.log('    Result:', JSON.stringify(result1));
+      console.log('  [SUBMIT] METHOD 1: Real mouse click via Puppeteer');
+      try {
+        await loginButtonHandle.asElement().click({ delay: 150 });
+        console.log('    Result: Click executed');
+      } catch(e) {
+        console.log('    Result: Click failed -', e.message);
+      }
       
-      // Wait 4 seconds and check if something happened
       await sleep(4000);
       const changed1 = await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
         return text.includes('verification') || text.includes('current balance') || 
                text.includes('remaining') || !!document.querySelector('.ant-modal') ||
-               !text.includes('service number'); // Navigated away from login
+               !text.includes('service number');
       });
       console.log('    Page changed:', changed1);
       
