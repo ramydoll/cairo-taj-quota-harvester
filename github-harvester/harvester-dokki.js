@@ -682,14 +682,14 @@ async function harvestQuota() {
     }
     
     // Trigger form validation
-    console.log('  [VALIDATE] Triggering form validation events...');
+    console.log('  [VALIDATE] Triggering password field blur...');
     await page.evaluate(() => {
-      const inputs = document.querySelectorAll('input, .ant-select');
-      inputs.forEach(inp => {
-        inp.dispatchEvent(new Event('blur', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-      });
+      // Only trigger validation on password - NOT .ant-select (resets dropdown state!)
+      const pwInput = document.querySelector('#login_password_input_01');
+      if (pwInput) {
+        pwInput.dispatchEvent(new Event('blur', { bubbles: true }));
+        pwInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     });
     await sleep(500);
     
@@ -1456,28 +1456,12 @@ async function harvestQuota() {
           console.log(`  ??  Interstitial page detected after ${waitTime}s: ${pageCheck.url}`);
           console.log('  ? Navigating to dashboard...');
           
-          // Try multiple navigation strategies
+          // Force navigate directly to accountoverview (correct dashboard URL)
           await page.evaluate(() => {
-            // Strategy 1: Click any "Skip" / "Close" / "Continue" buttons
-            const btns = Array.from(document.querySelectorAll('button, a'));
-            const skipBtn = btns.find(b => {
-              const txt = b.textContent?.toLowerCase() || '';
-              return txt.includes('skip') || txt.includes('close') || txt.includes('continue') || 
-                     txt.includes('later') || txt.includes('cancel') || txt.includes('×');
-            });
-            if (skipBtn) {
-              skipBtn.click();
-              return;
-            }
-            
-            // Strategy 2: Navigate to home/dashboard via URL
-            if (window.location.hash) {
-              window.location.hash = '#/accountoverview';
-            }
+            window.location.hash = '#/accountoverview';
           }).catch(() => {});
-          
-          await sleep(2000);
-          continue; // Re-check page state
+          await sleep(3000);
+          continue;
         }
         
         // Success: Dashboard loaded
