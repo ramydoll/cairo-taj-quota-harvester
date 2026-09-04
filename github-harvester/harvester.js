@@ -722,11 +722,8 @@ async function harvestQuota() {
     let loginTriggered = changed0;
     if (changed0) console.log('  [SUCCESS] Method 0 worked!');
 
-    // Get button handle fresh right before clicking
-    let loginTriggered2 = loginTriggered;
-    
     // METHOD 1: Real mouse click via Puppeteer
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       console.log('  [SUBMIT] METHOD 1: Real mouse click via Puppeteer');
       console.log('  [ANTI-BOT] Moving cursor to Login button...');
       
@@ -779,11 +776,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed1);
-      if (changed1) { loginTriggered2 = true; console.log('  [SUCCESS] Method 1 worked!'); }
+      if (changed1) { loginTriggered = true; console.log('  [SUCCESS] Method 1 worked!'); }
     }
     
     // METHOD 2: Enter key
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 2: Enter key on password field');
       await page.focus('#login_password_input_01');
@@ -797,11 +794,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed2);
-      if (changed2) { loginTriggered2 = true; console.log('  [SUCCESS] Method 2 worked!'); }
+      if (changed2) { loginTriggered = true; console.log('  [SUCCESS] Method 2 worked!'); }
     }
     
     // METHOD 3: form.submit()
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 3: form.submit()');
       await page.evaluate(() => {
@@ -816,11 +813,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed3);
-      if (changed3) { loginTriggered2 = true; console.log('  [SUCCESS] Method 3 worked!'); }
+      if (changed3) { loginTriggered = true; console.log('  [SUCCESS] Method 3 worked!'); }
     }
     
     // METHOD 4: Tab + Enter
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 4: Tab to button + Enter');
       await page.keyboard.press('Tab');
@@ -834,11 +831,11 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed4);
-      if (changed4) { loginTriggered2 = true; console.log('  [SUCCESS] Method 4 worked!'); }
+      if (changed4) { loginTriggered = true; console.log('  [SUCCESS] Method 4 worked!'); }
     }
     
     // METHOD 5: React event cascade
-    if (!loginTriggered2) {
+    if (!loginTriggered) {
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 5: React mousedown+mouseup+click cascade');
       await page.evaluate(() => {
@@ -860,10 +857,9 @@ async function harvestQuota() {
                !!document.querySelector('.ant-modal') || !text.includes('service number');
       });
       console.log('    Page changed:', changed5);
-      if (changed5) { loginTriggered2 = true; console.log('  [SUCCESS] Method 5 worked!'); }
+      if (changed5) { loginTriggered = true; console.log('  [SUCCESS] Method 5 worked!'); }
     }
     
-    const loginTriggered = loginTriggered2;
     if (loginTriggered) {
       console.log('  [OK] Login triggered successfully');
     } else {
