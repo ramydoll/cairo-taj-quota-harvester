@@ -660,8 +660,28 @@ async function harvestQuota() {
                              fullText.includes('Select Type') ||
                              !!document.querySelector('#login_loginid_input_01');
         
-        return { hasCaptcha, isBlocked, hasDashboard, stillOnLogin, text: text.slice(0, 200) };
+        // VERBOSE DEBUG DATA
+        const debugInfo = {
+          modalCount: document.querySelectorAll('.ant-modal, [class*="modal"]').length,
+          buttonCount: document.querySelectorAll('button:not([disabled])').length,
+          inputCount: document.querySelectorAll('input[type="text"], input[type="password"]').length,
+          bodyLength: fullText.length,
+          firstLines: fullText.split('\n').slice(0, 8).join(' | ').slice(0, 300)
+        };
+        
+        return { hasCaptcha, isBlocked, hasDashboard, stillOnLogin, text: text.slice(0, 200), debugInfo };
       });
+
+      // VERBOSE LOGGING - Every 1 second (10 ticks × 100ms)
+      if (tick % 10 === 0) {
+        const elapsed = (tick * 0.1).toFixed(1);
+        console.log(`  [DEBUG ${elapsed}s] cap:${pageState.hasCaptcha} dash:${pageState.hasDashboard} login:${pageState.stillOnLogin} block:${pageState.isBlocked} | modals:${pageState.debugInfo.modalCount} btns:${pageState.debugInfo.buttonCount}`);
+        
+        // Every 5 seconds, show page content
+        if (tick > 0 && tick % 50 === 0) {
+          console.log(`    → Page content: ${pageState.debugInfo.firstLines}`);
+        }
+      }
 
       // Priority 1: CAPTCHA detected (INSTANT - within first 100ms!)
       if (pageState.hasCaptcha) {
@@ -686,7 +706,7 @@ async function harvestQuota() {
         break;
       }
       
-      // Log progress less frequently (every 3 seconds instead of every 1 second)
+      // Standard progress log (every 3 seconds)
       if (tick > 0 && tick % 30 === 0) {
         const seconds = Math.round(tick * 0.1);
         console.log(`  Waiting... ${seconds} s`);
@@ -704,6 +724,26 @@ async function harvestQuota() {
     }
 
     if (postLoginState === 'unknown') {
+      // FINAL DEBUG DUMP before giving up
+      console.log('  [FINAL DEBUG] Capturing page state before error...');
+      const finalDebug = await page.evaluate(() => {
+        return {
+          url: window.location.href,
+          title: document.title,
+          bodySnippet: document.body.innerText.slice(0, 500),
+          visibleModals: Array.from(document.querySelectorAll('.ant-modal, [class*="modal"]')).map(m => ({
+            visible: m.style.display !== 'none',
+            className: m.className
+          })),
+          allButtons: Array.from(document.querySelectorAll('button')).slice(0, 10).map(b => ({
+            text: b.textContent?.trim().slice(0, 30),
+            disabled: b.disabled,
+            visible: b.offsetParent !== null
+          }))
+        };
+      });
+      console.log('  [FINAL DEBUG]', JSON.stringify(finalDebug, null, 2));
+      
       // Before giving up, do one final check for dashboard elements
       const finalCheck = await page.evaluate(() => {
         const text = document.body.innerText;
@@ -714,6 +754,7 @@ async function harvestQuota() {
         postLoginState = 'navigated';
       } else {
         throw new Error('Still on login page - no navigation, dashboard, captcha, or block after 25s');
+
       }
     }
 
