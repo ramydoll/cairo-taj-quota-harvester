@@ -455,6 +455,30 @@ async function harvestQuota() {
       }
     ], 'DROPDOWN', 20000);
 
+    // ======================================
+    // VERIFY DROPDOWN SELECTION PERSISTED
+    // ======================================
+    await sleep(1000);
+    console.log('  [VERIFY] Checking dropdown selection...');
+    const dropdownVerify = await page.evaluate(() => {
+      const selector = document.querySelector('.ant-select-selection-item');
+      const text = selector ? selector.textContent.trim() : null;
+      return { selected: text, isInternet: text?.toLowerCase().includes('internet') };
+    });
+    console.log('    Dropdown state:', JSON.stringify(dropdownVerify));
+    
+    if (!dropdownVerify.isInternet) {
+      console.log('  [WARNING] Dropdown not showing Internet, re-clicking...');
+      await page.click('.ant-select-selector');
+      await sleep(1000);
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
+        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
+        if (internet) internet.click();
+      });
+      await sleep(1000);
+    }
+
     console.log('  [OK] Dropdown done\n');
 
     // Human-like pause before password
@@ -531,19 +555,76 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
-    // NUCLEAR SUBMISSION - Try EVERY possible method until something works
+    // WAIT FOR LOGIN BUTTON TO BE ENABLED (form validation passed)
+    console.log('  [WAIT] Waiting for Login button to become enabled...');
+    let buttonEnabled = false;
+    for (let i = 0; i < 10; i++) {
+      const btnState = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
+        return loginBtn ? { disabled: loginBtn.disabled, text: loginBtn.textContent.trim() } : null;
+      });
+      
+      if (btnState && !btnState.disabled) {
+        console.log(`  [OK] Button enabled after ${i}s:`, btnState.text);
+        buttonEnabled = true;
+        break;
+      }
+      
+      if (i % 2 === 0) {
+        console.log(`    Waiting... ${i}s (button still disabled)`);
+      }
+      await sleep(1000);
+    }
+    
+    if (!buttonEnabled) {
+      console.log('  [WARNING] Button still disabled after 10s, checking form state...');
+      const formState = await page.evaluate(() => {
+        const serviceNum = document.querySelector('#login_loginid_input_01')?.value;
+        const dropdown = document.querySelector('.ant-select-selection-item')?.textContent;
+        const password = document.querySelector('#login_password_input_01')?.value;
+        return { serviceNum: serviceNum?.slice(0,4) + '***', dropdown, password: password ? '***' : null };
+      });
+      console.log('    Form state:', JSON.stringify(formState));
+      
+      // If dropdown not selected, try again
+      if (!formState.dropdown || formState.dropdown === 'Select Type') {
+        console.log('  [FIX] Dropdown not selected! Re-clicking Internet...');
+        await page.click('.ant-select-selector');
+        await sleep(1000);
+        await page.evaluate(() => {
+          const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
+          const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
+          if (internet) internet.click();
+        });
+        await sleep(2000);
+      }
+      
+      // Force enable button
+      await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
+        if (loginBtn) {
+          loginBtn.disabled = false;
+          loginBtn.classList.remove('ant-btn-disabled');
+        }
+      });
+      console.log('  [FORCE] Enabled button manually');
+    }
+    
     await sleep(1000);
     
+    // PROGRESSIVE SUBMISSION - Try methods with delays, check after each
     console.log('  [SUBMIT] METHOD 1: Button click with validation trigger');
     const method1 = await page.evaluate(() => {
-      // Trigger validation on all inputs
+      // Trigger validation
       const inputs = document.querySelectorAll('input');
       inputs.forEach(inp => {
         inp.dispatchEvent(new Event('blur', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       });
       
-      // Find Login button
+      // Click button
       const btns = Array.from(document.querySelectorAll('button'));
       let loginBtn = btns.find(b => b.textContent && b.textContent.toLowerCase().includes('login'));
       if (!loginBtn) {
@@ -554,7 +635,6 @@ async function harvestQuota() {
       
       if (!loginBtn) return { success: false, reason: 'No button found' };
       
-      // Force enable and click
       loginBtn.disabled = false;
       loginBtn.classList.remove('ant-btn-disabled');
       loginBtn.click();
@@ -563,62 +643,72 @@ async function harvestQuota() {
       return { success: true, buttonText: loginBtn.textContent.trim() };
     });
     console.log('    Result:', JSON.stringify(method1));
-    await sleep(2000); // Wait for React to process
     
-    // Check if anything happened
+    // Wait and check if something changed
+    await sleep(3000);
     let somethingChanged = await page.evaluate(() => {
-      return document.body.innerText.toLowerCase().includes('verification') ||
-             document.body.innerText.includes('Current Balance') ||
+      const text = document.body.innerText.toLowerCase();
+      return text.includes('verification') ||
+             text.includes('current balance') ||
+             text.includes('remaining') ||
              !!document.querySelector('.ant-modal');
     });
+    console.log('    Changed:', somethingChanged);
     
     if (!somethingChanged) {
       console.log('  [SUBMIT] METHOD 2: Enter key on password field');
       await page.focus('#login_password_input_01');
       await page.keyboard.press('Enter');
-      await sleep(2000);
+      await sleep(3000);
       
       somethingChanged = await page.evaluate(() => {
-        return document.body.innerText.toLowerCase().includes('verification') ||
-               document.body.innerText.includes('Current Balance') ||
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('verification') ||
+               text.includes('current balance') ||
                !!document.querySelector('.ant-modal');
       });
+      console.log('    Changed:', somethingChanged);
     }
     
     if (!somethingChanged) {
       console.log('  [SUBMIT] METHOD 3: Direct form.submit()');
       await page.evaluate(() => {
         const form = document.querySelector('form');
-        if (form && form.submit) {
-          form.submit();
-        }
+        if (form && form.submit) form.submit();
       });
-      await sleep(2000);
+      await sleep(3000);
       
       somethingChanged = await page.evaluate(() => {
-        return document.body.innerText.toLowerCase().includes('verification') ||
-               document.body.innerText.includes('Current Balance') ||
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('verification') ||
+               text.includes('current balance') ||
                !!document.querySelector('.ant-modal');
       });
+      console.log('    Changed:', somethingChanged);
     }
     
     if (!somethingChanged) {
-      console.log('  [SUBMIT] METHOD 4: Programmatic button click via coordinates');
-      const loginButton = await page.$('button:not([disabled])');
-      if (loginButton) {
-        await loginButton.click({ delay: 100 });
-        await sleep(2000);
-      }
+      console.log('  [SUBMIT] METHOD 4: Tab to button + Enter');
+      await page.keyboard.press('Tab');
+      await sleep(500);
+      await page.keyboard.press('Enter');
+      await sleep(3000);
+      
+      somethingChanged = await page.evaluate(() => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('verification') ||
+               text.includes('current balance') ||
+               !!document.querySelector('.ant-modal');
+      });
+      console.log('    Changed:', somethingChanged);
     }
     
     if (!somethingChanged) {
-      console.log('  [SUBMIT] METHOD 5: Force React form submission via __reactEventHandlers');
+      console.log('  [SUBMIT] METHOD 5: Force React event cascade');
       await page.evaluate(() => {
-        // Find all buttons and trigger their React onClick handlers
         const buttons = document.querySelectorAll('button');
         for (const btn of buttons) {
           if (btn.textContent.toLowerCase().includes('login')) {
-            // Trigger ALL possible events
             const events = ['mousedown', 'mouseup', 'click'];
             events.forEach(eventType => {
               btn.dispatchEvent(new MouseEvent(eventType, {
@@ -631,11 +721,11 @@ async function harvestQuota() {
           }
         }
       });
-      await sleep(2000);
+      await sleep(3000);
     }
     
-    console.log('  [SUBMIT] All methods attempted, waiting for result...');
-    await sleep(2000); // Final wait for any delayed response
+    console.log('  [SUBMIT] All methods attempted, final wait...');
+    await sleep(2000);
 
     // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
