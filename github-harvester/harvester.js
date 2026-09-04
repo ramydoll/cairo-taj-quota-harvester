@@ -1477,7 +1477,7 @@ async function harvestQuota() {
             
             // Strategy 2: Navigate to home/dashboard via URL
             if (window.location.hash) {
-              window.location.hash = '#/home';
+              window.location.hash = '#/accountoverview';
             }
           }).catch(() => {});
           
