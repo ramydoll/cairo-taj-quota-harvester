@@ -585,17 +585,27 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
-    // INTERCEPT NETWORK: Monitor if any XHR fires after button click
+    // INTERCEPT NETWORK: Stop as soon as login request fires
     let loginRequestFired = false;
     let loginRequestUrl = '';
+    let authRequestFired = false; // Track specifically the auth endpoint
+    let captchaRequestFired = false; // Track captcha generation
+    
     page.on('request', (req) => {
       const url = req.url();
-      if (url.includes('/login') || url.includes('/auth') || url.includes('/token') || 
-          url.includes('/api') || url.includes('/echannel')) {
-        if (req.method() === 'POST' || req.method() === 'PUT') {
+      if (req.method() === 'POST') {
+        if (url.includes('userAuthenticate') || url.includes('auth/login') || url.includes('auth/token')) {
+          authRequestFired = true;
           loginRequestFired = true;
           loginRequestUrl = url;
-          console.log('  [NETWORK] Login request fired:', req.method(), url.slice(0, 100));
+          console.log('  [NETWORK] ✅ AUTH request fired:', url.slice(0, 120));
+        } else if (url.includes('GenerateCaptcha') || url.includes('captcha')) {
+          captchaRequestFired = true;
+          console.log('  [NETWORK] 🔐 CAPTCHA request fired:', url.slice(0, 120));
+        } else if (url.includes('/api') || url.includes('/rest') || url.includes('/service')) {
+          loginRequestFired = true;
+          loginRequestUrl = url;
+          console.log('  [NETWORK] Login request fired:', url.slice(0, 120));
         }
       }
     });
@@ -765,18 +775,28 @@ async function harvestQuota() {
       
       // Log if network request fired
       console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
+      console.log('    Auth request fired:', authRequestFired);
       
-      const changed1 = await page.evaluate(() => {
+      // If auth endpoint was called, login is in progress - STOP HERE regardless of page state!
+      if (authRequestFired) {
+        console.log('  [SUCCESS] Auth endpoint called - login in progress, skipping remaining methods!');
+        loginTriggered = true;
+      }
+      
+      const changed1 = authRequestFired || await page.evaluate(() => {
         const text = document.body.innerText.toLowerCase();
+        const url = window.location.href;
         return text.includes('verification') || text.includes('current balance') ||
-               !!document.querySelector('.ant-modal') || !text.includes('service number');
+               !!document.querySelector('.ant-modal') || !text.includes('service number') ||
+               !url.includes('login');
       });
       console.log('    Page changed:', changed1);
       if (changed1) { loginTriggered = true; console.log('  [SUCCESS] Method 1 worked!'); }
     }
     
-    // METHOD 2: Enter key
+    // METHOD 2: Enter key - ONLY if auth was NOT already triggered
     if (!loginTriggered) {
+      authRequestFired = false;
       loginRequestFired = false;
       console.log('  [SUBMIT] METHOD 2: Enter key on password field');
       await page.focus('#login_password_input_01');
@@ -968,7 +988,7 @@ async function harvestQuota() {
       }
 
       // Priority 1: CAPTCHA detected (INSTANT - within first 100ms!)
-      if (pageState.hasCaptcha) {
+      if (pageState.hasCaptcha || captchaRequestFired) {
         postLoginState = 'captcha';
         const detectionTime = (tick * 0.1).toFixed(1);
         console.log(`  [CAPTCHA] ? INSTANT DETECTION at ${detectionTime}s (tick ${tick})`);
