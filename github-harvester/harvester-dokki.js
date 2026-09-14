@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer-extra');
+﻿const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fetch = require('node-fetch');
 
@@ -11,7 +11,7 @@ const WE_PASSWORD = process.env.DOKKI_PASSWORD;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_GROUP_ID = process.env.TELEGRAM_GROUP_ID; // Group chat for colleague
-const MAX_RETRIES = 5;
+const MAX_RETRIES = 5; // Increased from 3 for better resilience (FIX #6)
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -36,50 +36,25 @@ async function withTimeout(promise, ms, name) {
 }
 
 async function tryMethods(methods, stepName, timeout) {
-  const RETRIES_PER_METHOD = 2; // Each method tries twice before moving to next
-  
   for (let i = 0; i < methods.length; i++) {
-    let methodSuccess = false;
-    
-    for (let attempt = 1; attempt <= RETRIES_PER_METHOD; attempt++) {
-      try {
-        if (attempt === 1) {
-          console.log(`  [${i+1}/${methods.length}]`);
-        } else {
-          console.log(`  [${i+1}/${methods.length}] retry ${attempt}/${RETRIES_PER_METHOD}`);
-        }
-        
-        const result = await withTimeout(methods[i](), timeout, `${stepName} M${i+1}`);
-        console.log(`  ? Method ${i+1} SUCCESS${attempt > 1 ? ` (on attempt ${attempt})` : ''}`);
-        return result;
-        
-      } catch (e) {
-        console.log(`  ? Method ${i+1} attempt ${attempt} FAILED: ${e.message}`);
-        
-        if (attempt < RETRIES_PER_METHOD) {
-          // Retry this method after progressive delay
-          const retryDelay = 2000 + (attempt * 2000); // 2s, 4s, 6s...
-          console.log(`    ? Retrying method ${i+1} in ${retryDelay/1000}s...`);
-          await sleep(retryDelay);
-        } else {
-          // All retries exhausted for this method, move to next
-          if (i === methods.length - 1) {
-            throw new Error(`${stepName} ALL METHODS FAILED (each tried ${RETRIES_PER_METHOD}x)`);
-          }
-          console.log(`    ? Moving to next method...`);
-          await sleep(500);
-          break;
-        }
-      }
+    try {
+      console.log(`  [${i+1}/${methods.length}]`);
+      const result = await withTimeout(methods[i](), timeout, `${stepName} M${i+1}`);
+      console.log(`  ✓ Method ${i+1} SUCCESS`);
+      return result;
+    } catch (e) {
+      console.log(`  ✗ Method ${i+1} FAILED: ${e.message}`);
+      if (i === methods.length - 1) throw new Error(`${stepName} ALL METHODS FAILED`);
+      await sleep(500);
     }
   }
 }
 
 async function harvestQuota() {
-  console.log('?? STARTING...\n');
+  console.log('🚀 STARTING...\n');
   let browser, page;
 
-  // ?? Session Cookie Helpers (Dokki) ????????????????????????????????????????
+  // ── Session Cookie Helpers (Dokki) ────────────────────────────────────────
   async function loadSavedCookies() {
     try {
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
@@ -107,7 +82,7 @@ async function harvestQuota() {
           line:     { stringValue: 'dokki' }
         }})
       });
-      console.log('  [SESSION] Cookies saved to Firestore ?');
+      console.log('  [SESSION] Cookies saved to Firestore ✓');
     } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
   }
 
@@ -120,7 +95,7 @@ async function harvestQuota() {
       console.log('  [SESSION] Cookies cleared');
     } catch(e) {}
   }
-  // ??????????????????????????????????????????????????????????????????????????
+  // ──────────────────────────────────────────────────────────────────────────
 
   try {
     browser = await puppeteer.launch({
@@ -167,9 +142,9 @@ async function harvestQuota() {
       await dialog.accept();
     });
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     // STEP 0: TRY SAVED SESSION COOKIES
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 0: SESSION CHECK');
     let sessionValid = false;
     const savedCookies = await loadSavedCookies();
@@ -183,22 +158,22 @@ async function harvestQuota() {
         const isLoggedIn = !url.includes('login') && url.includes('account');
         if (isLoggedIn) {
           sessionValid = true;
-          console.log('  ? Session still valid! Skipping login entirely.\n');
+          console.log('  ✓ Session still valid! Skipping login entirely.\n');
         } else {
-          console.log('  ? Session expired, clearing and doing fresh login');
+          console.log('  ✗ Session expired, clearing and doing fresh login');
           await clearCookies();
         }
       } catch(e) {
-        console.log('  ? Session check failed:', e.message);
+        console.log('  ✗ Session check failed:', e.message);
         await clearCookies();
       }
     } else {
       console.log('  No saved session, will do fresh login\n');
     }
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 1: NAVIGATE');
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     if (!sessionValid) {
     await tryMethods([
       // M1: EXACT same as working local harvester
@@ -368,10 +343,6 @@ async function harvestQuota() {
     const delay2 = randomDelay(5000, 8000);
     console.log('  [HUMAN] pause', delay2, 'ms');
     await sleep(delay2);
-    
-    // CRITICAL FIX: WE validates service number server-side before enabling dropdown
-    console.log('  [WAIT] Waiting for WE server to validate service number...');
-    await sleep(3000); // Server validation delay - CRITICAL!
 
     // Wait for dropdown to appear after username triggers React re-render
     console.log('  Waiting for dropdown to appear...');
@@ -455,39 +426,10 @@ async function harvestQuota() {
       }
     ], 'DROPDOWN', 20000);
 
-    // ======================================
-    // VERIFY DROPDOWN SELECTION PERSISTED
-    // ======================================
-    await sleep(1000);
-    console.log('  [VERIFY] Checking dropdown selection...');
-    const dropdownVerify = await page.evaluate(() => {
-      const selector = document.querySelector('.ant-select-selection-item');
-      const text = selector ? selector.textContent.trim() : null;
-      return { selected: text, isInternet: text?.toLowerCase().includes('internet') };
-    });
-    console.log('    Dropdown state:', JSON.stringify(dropdownVerify));
-    
-    if (!dropdownVerify.isInternet) {
-      console.log('  [WARNING] Dropdown not showing Internet, re-clicking...');
-      await page.click('.ant-select-selector');
-      await sleep(1000);
-      await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
-        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
-        if (internet) internet.click();
-      });
-      await sleep(1000);
-    }
+    console.log('  [OK] Dropdown done\n');
 
-    console.log('  [OK] Dropdown done');
-    
-    // CRITICAL FIX: Wait for React to propagate dropdown selection to form state
-    console.log('  [WAIT] Waiting for React form state to update...');
-    await sleep(2500); // React state propagation delay - CRITICAL!
-    console.log('  [OK] Form state updated\n');
-
-    // Human-like pause before password (REDUCED to beat form timeout)
-    const delay3 = randomDelay(2000, 3000); // Was 5-8s, now 2-3s
+    // Human-like pause before password
+    const delay3 = randomDelay(5000, 8000);
     console.log('  [HUMAN] pause', delay3, 'ms');
     await sleep(delay3);
 
@@ -550,34 +492,9 @@ async function harvestQuota() {
     ], 'PASSWORD', 60000);
 
     console.log('  [OK] Password done\n');
-    
-    // RE-VERIFY DROPDOWN AFTER PASSWORD (critical fix!)
-    await sleep(500);
-    console.log('  [RE-VERIFY] Checking dropdown still selected after password...');
-    const dropdownRecheck = await page.evaluate(() => {
-      const selector = document.querySelector('.ant-select-selection-item');
-      const text = selector ? selector.textContent.trim() : null;
-      return { selected: text, isInternet: text?.toLowerCase().includes('internet') };
-    });
-    console.log('    Dropdown state:', JSON.stringify(dropdownRecheck));
-    
-    if (!dropdownRecheck.isInternet) {
-      console.log('  [FIX] Dropdown lost after password! Re-selecting Internet...');
-      await page.click('.ant-select-selector');
-      await sleep(800);
-      await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
-        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
-        if (internet) internet.click();
-      });
-      await sleep(800);
-      console.log('  [OK] Dropdown re-selected');
-    } else {
-      console.log('  [OK] Dropdown still valid');
-    }
 
-    // Human-like pause before submit (REDUCED to beat timeout)
-    const delay4 = randomDelay(2000, 3000); // Was 5-8s, now 2-3s
+    // Human-like pause before submit
+    const delay4 = randomDelay(5000, 8000);
     console.log('  [HUMAN] pause', delay4, 'ms');
     await sleep(delay4);
 
@@ -585,309 +502,81 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
-    // INTERCEPT NETWORK: Stop as soon as login request fires
-    let loginRequestFired = false;
-    let loginRequestUrl = '';
-    let authRequestFired = false; // Track specifically the auth endpoint
-    let captchaRequestFired = false; // Track captcha generation
-    
-    page.on('request', (req) => {
-      const url = req.url();
-      if (req.method() === 'POST') {
-        if (url.includes('userAuthenticate') || url.includes('auth/login') || url.includes('auth/token')) {
-          authRequestFired = true;
-          loginRequestFired = true;
-          loginRequestUrl = url;
-          console.log('  [NETWORK] ✅ AUTH request fired:', url.slice(0, 120));
-        } else if (url.includes('GenerateCaptcha') || url.includes('captcha')) {
-          captchaRequestFired = true;
-          console.log('  [NETWORK] 🔐 CAPTCHA request fired:', url.slice(0, 120));
-        } else if (url.includes('/api') || url.includes('/rest') || url.includes('/service')) {
-          loginRequestFired = true;
-          loginRequestUrl = url;
-          console.log('  [NETWORK] Login request fired:', url.slice(0, 120));
-        }
-      }
-    });
-    
-    // FINAL DROPDOWN + FORM STATE CHECK
-    console.log('  [FINAL CHECK] Verifying form ready for submission...');
-    const formReady = await page.evaluate(() => {
-      const serviceNum = document.querySelector('#login_loginid_input_01')?.value;
-      const dropdown = document.querySelector('.ant-select-selection-item')?.textContent?.trim();
-      const password = document.querySelector('#login_password_input_01')?.value;
-      const loginBtn = Array.from(document.querySelectorAll('button')).find(b => 
-        b.textContent.toLowerCase().includes('login')
+    // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
+    await sleep(1000);
+    const submitSuccess = await page.evaluate(() => {
+      // Step 1: Trigger validation on all inputs
+      const inputs = document.querySelectorAll('input');
+      inputs.forEach(inp => {
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      
+      // Step 2: Find the Login button (multiple strategies)
+      const btns = Array.from(document.querySelectorAll('button'));
+      let loginBtn = btns.find(b => 
+        b.textContent && b.textContent.toLowerCase().includes('login') ||
+        b.className && (b.className.includes('primary') || b.className.includes('submit'))
       );
       
-      // Also log the full form HTML for debugging
-      const form = document.querySelector('form');
-      const formId = form ? form.id || form.className : 'no form';
-      
-      return {
-        hasService: !!serviceNum,
-        serviceLen: serviceNum ? serviceNum.length : 0,
-        dropdown: dropdown,
-        hasPassword: !!password,
-        passwordLen: password ? password.length : 0,
-        buttonDisabled: loginBtn?.disabled,
-        buttonClass: loginBtn?.className,
-        buttonText: loginBtn?.textContent?.trim(),
-        formId: formId
-      };
-    });
-    console.log('    Form state:', JSON.stringify(formReady));
-    
-    // If dropdown not selected, fix it NOW
-    if (!formReady.dropdown || formReady.dropdown === 'Select Type') {
-      console.log('  [CRITICAL] Dropdown not selected! Fixing...');
-      await page.click('.ant-select-selector');
-      await sleep(800);
-      await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
-        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
-        if (internet) internet.click();
-      });
-      await sleep(1500);
-      console.log('  [OK] Dropdown fixed');
-    }
-    
-    // Wait for button to be enabled (with timeout)
-    console.log('  [WAIT] Waiting for Login button to be enabled...');
-    let buttonEnabled = false;
-    for (let i = 0; i < 8; i++) {
-      const btnState = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
-        return loginBtn ? { disabled: loginBtn.disabled, text: loginBtn.textContent.trim(), className: loginBtn.className } : null;
-      });
-      
-      if (btnState && !btnState.disabled) {
-        console.log(`  [OK] Button enabled after ${i}s - class: ${btnState.className}`);
-        buttonEnabled = true;
-        break;
+      // Fallback: look for button inside form
+      if (!loginBtn) {
+        const form = document.querySelector('form');
+        if (form) loginBtn = form.querySelector('button[type="submit"], button.ant-btn-primary');
       }
       
-      if (i > 0) console.log(`    Still waiting... ${i}s (disabled)`);
-      await sleep(1000);
-    }
-    
-    if (!buttonEnabled) {
-      console.log('  [FORCE] Button still disabled, forcing enable...');
-      await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
-        if (loginBtn) {
-          loginBtn.disabled = false;
-          loginBtn.classList.remove('ant-btn-disabled');
-          loginBtn.removeAttribute('disabled');
-        }
-      });
-    }
-    
-    await sleep(500);
-    
-    // METHOD 0: Try direct API call first (bypass the form entirely)
-    console.log('  [SUBMIT] METHOD 0: Direct API login attempt...');
-    const apiLoginResult = await page.evaluate(async (username, password) => {
+      // Fallback: last button on page (usually Submit/Login)
+      if (!loginBtn && btns.length > 0) loginBtn = btns[btns.length - 1];
+      
+      if (!loginBtn) return { success: false, reason: 'No login button found' };
+      
+      // Step 3: Ensure button is enabled
+      if (loginBtn.disabled) {
+        loginBtn.disabled = false;
+        loginBtn.classList.remove('ant-btn-disabled');
+      }
+      
+      // Step 4: Click the button (multiple methods)
       try {
-        // Try to find any login endpoint from the page's existing network activity
-        const loginEndpoints = [
-          '/api/v1/user/login',
-          '/api/login',
-          '/echannel/api/login',
-          '/rest/v1/login'
-        ];
-        
-        // Also try submitting the form via requestSubmit (proper HTML5 way)
-        const form = document.querySelector('form');
-        if (form && form.requestSubmit) {
-          const btn = form.querySelector('button[type="submit"], button.ant-btn-primary');
-          if (btn) {
-            form.requestSubmit(btn);
-            return { method: 'requestSubmit', success: true };
-          }
-          form.requestSubmit();
-          return { method: 'form.requestSubmit()', success: true };
-        }
-        return { method: 'no form.requestSubmit', success: false };
+        loginBtn.click(); // Native click
+        loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); // Synthetic click
+        return { success: true, buttonText: loginBtn.textContent.trim() };
       } catch(e) {
-        return { method: 'error', error: e.message };
+        return { success: false, reason: e.message };
       }
-    }, WE_USERNAME, WE_PASSWORD);
-    console.log('    Result:', JSON.stringify(apiLoginResult));
-    
-    await sleep(3000);
-    let changed0 = await page.evaluate(() => {
-      const text = document.body.innerText.toLowerCase();
-      return text.includes('verification') || text.includes('current balance') ||
-             !!document.querySelector('.ant-modal') || !text.includes('service number');
     });
-    console.log('    Page changed:', changed0);
     
-    let loginTriggered = changed0;
-    if (changed0) console.log('  [SUCCESS] Method 0 worked!');
-
-    // METHOD 1: Real mouse click via Puppeteer
-    if (!loginTriggered) {
-      console.log('  [SUBMIT] METHOD 1: Real mouse click via Puppeteer');
-      console.log('  [ANTI-BOT] Moving cursor to Login button...');
-      
-      // Get fresh button handle
-      const btnHandle = await page.evaluateHandle(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        return btns.find(b => b.textContent.toLowerCase().includes('login') && !b.disabled);
-      });
-      
-      if (btnHandle && btnHandle.asElement()) {
-        const box = await btnHandle.asElement().boundingBox();
-        if (box) {
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 15 });
-          await sleep(500);
-        }
-        
-        // Take screenshot before click and send to Telegram for debugging
-        try {
-          const screenshotB64 = await page.screenshot({ encoding: 'base64' });
-          const caption = `[BEFORE CLICK] Form: svc=${formReady.hasService} drop=${formReady.dropdown} pwd=${formReady.hasPassword} btnDis=${formReady.buttonDisabled}`;
-          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: TELEGRAM_CHAT_ID,
-              photo: 'data:image/png;base64,' + screenshotB64,
-              caption: caption.slice(0, 200)
-            })
-          }).catch(() => {});
-        } catch(e) {}
-        
-        try {
-          await btnHandle.asElement().click({ delay: 150 });
-          console.log('    Clicked!');
-        } catch(e) {
-          console.log('    Click error:', e.message);
-        }
-      } else {
-        console.log('    No enabled button found for click');
-      }
-      
-      await sleep(4000);
-      
-      // Log if network request fired
-      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
-      console.log('    Auth request fired:', authRequestFired);
-      
-      // If auth endpoint was called, login is in progress - STOP HERE regardless of page state!
-      if (authRequestFired) {
-        console.log('  [SUCCESS] Auth endpoint called - login in progress, skipping remaining methods!');
-        loginTriggered = true;
-      }
-      
-      const changed1 = authRequestFired || await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase();
-        const url = window.location.href;
-        return text.includes('verification') || text.includes('current balance') ||
-               !!document.querySelector('.ant-modal') || !text.includes('service number') ||
-               !url.includes('login');
-      });
-      console.log('    Page changed:', changed1);
-      if (changed1) { loginTriggered = true; console.log('  [SUCCESS] Method 1 worked!'); }
-    }
+    console.log('    [SUBMIT] Result:', JSON.stringify(submitSuccess));
     
-    // METHOD 2: Enter key - ONLY if auth was NOT already triggered
-    if (!loginTriggered) {
-      authRequestFired = false;
-      loginRequestFired = false;
-      console.log('  [SUBMIT] METHOD 2: Enter key on password field');
-      await page.focus('#login_password_input_01');
-      await sleep(300);
+    if (!submitSuccess.success) {
+      console.log('    [SUBMIT] Button click failed, trying Enter key fallback...');
       await page.keyboard.press('Enter');
-      await sleep(4000);
-      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
-      const changed2 = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') ||
-               !!document.querySelector('.ant-modal') || !text.includes('service number');
-      });
-      console.log('    Page changed:', changed2);
-      if (changed2) { loginTriggered = true; console.log('  [SUCCESS] Method 2 worked!'); }
     }
     
-    // METHOD 3: form.submit()
-    if (!loginTriggered) {
-      loginRequestFired = false;
-      console.log('  [SUBMIT] METHOD 3: form.submit()');
-      await page.evaluate(() => {
-        const form = document.querySelector('form');
-        if (form && form.submit) form.submit();
-      });
-      await sleep(4000);
-      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
-      const changed3 = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') ||
-               !!document.querySelector('.ant-modal') || !text.includes('service number');
-      });
-      console.log('    Page changed:', changed3);
-      if (changed3) { loginTriggered = true; console.log('  [SUCCESS] Method 3 worked!'); }
-    }
-    
-    // METHOD 4: Tab + Enter
-    if (!loginTriggered) {
-      loginRequestFired = false;
-      console.log('  [SUBMIT] METHOD 4: Tab to button + Enter');
-      await page.keyboard.press('Tab');
-      await sleep(300);
-      await page.keyboard.press('Enter');
-      await sleep(4000);
-      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
-      const changed4 = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') ||
-               !!document.querySelector('.ant-modal') || !text.includes('service number');
-      });
-      console.log('    Page changed:', changed4);
-      if (changed4) { loginTriggered = true; console.log('  [SUCCESS] Method 4 worked!'); }
-    }
-    
-    // METHOD 5: React event cascade
-    if (!loginTriggered) {
-      loginRequestFired = false;
-      console.log('  [SUBMIT] METHOD 5: React mousedown+mouseup+click cascade');
-      await page.evaluate(() => {
-        const btns = document.querySelectorAll('button');
-        for (const btn of btns) {
-          if (btn.textContent.toLowerCase().includes('login')) {
-            ['mousedown', 'mouseup', 'click'].forEach(evt => {
-              btn.dispatchEvent(new MouseEvent(evt, { view: window, bubbles: true, cancelable: true }));
-            });
-            break;
-          }
-        }
-      });
-      await sleep(4000);
-      console.log('    Network request fired:', loginRequestFired, loginRequestUrl || 'none');
-      const changed5 = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('verification') || text.includes('current balance') ||
-               !!document.querySelector('.ant-modal') || !text.includes('service number');
-      });
-      console.log('    Page changed:', changed5);
-      if (changed5) { loginTriggered = true; console.log('  [SUCCESS] Method 5 worked!'); }
-    }
-    
-    if (loginTriggered) {
-      console.log('  [OK] Login triggered successfully');
-    } else {
-      console.log('  [WARNING] No method triggered login - network fired:', loginRequestFired);
-    }
-    
-    await sleep(1000);
+    await sleep(6000);
 
     // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
     // ======================================
     console.log('  Waiting for login result...');
+    
+    // FIX #5: Check for rate limiting early
+    // Problem: Script doesn't detect when WE is actively blocking
+    // Solution: Check for rate limit messages before continuing
+    await sleep(1000);
+    const isBlocked = await page.evaluate(() => {
+      const text = document.body.innerText.toLowerCase();
+      return text.includes('too many') || 
+             text.includes('rate limit') ||
+             text.includes('temporarily blocked') ||
+             text.includes('try again later') ||
+             text.includes('تم حظر'); // Arabic for "blocked"
+    });
+    
+    if (isBlocked) {
+      console.log('⚠️  WE server is rate limiting - stopping to avoid ban');
+      throw new Error('Rate limited by WE server');
+    }
     
     // IMMEDIATE CHECK: See if form validation error appeared
     // Skip generic UI text like "Internet", "Select Type", etc.
@@ -911,166 +600,81 @@ async function harvestQuota() {
       throw new Error('Form validation error: ' + formError);
     }
 
-    // ======================================
-    // ======================================
-    // ULTIMATE NAVIGATION DETECTION v3
-    // 100ms polling for INSTANT captcha detection (no more wasted attempts!)
-    // Multi-signal: URL change OR dashboard elements OR block OR captcha
-    // ======================================
     let postLoginState = 'unknown';
-    const MAX_TICKS = 250; // 250 * 100ms = 25 seconds total
-    
-    for (let tick = 0; tick < MAX_TICKS; tick++) {
+    for (let tick = 0; tick < 20; tick++) {
       const currentUrl = page.url();
-      
-      // Signal 1: URL changed away from login
       if (!currentUrl.includes('login')) {
         postLoginState = 'navigated';
-        console.log('  [OK] URL changed to:', currentUrl, `(${tick * 0.1}s)`);
+        console.log('  [OK] URL changed to:', currentUrl);
         break;
       }
-      
-      // Signal 2-5: Check page state (RAPID POLLING - check EVERY 100ms!)
       const pageState = await page.evaluate(() => {
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
-        const fullText = document.body.innerText;
-        
-        // CAPTCHA detection (multiple strategies for instant detection)
-        const hasCaptcha = !!modal || 
-                           text.includes('verification') || 
-                           text.includes('enter code') ||
-                           text.includes('captcha') ||
-                           !!document.querySelector('input[placeholder*="code"]') ||
-                           !!document.querySelector('input[placeholder*="Code"]') ||
-                           !!document.querySelector('[class*="captcha"]');
-        
-        // Block message detection
+        const hasCaptcha = !!modal || text.includes('verification') || text.includes('enter code');
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') || text.includes('try again') ||
-                          text.includes('blocked') || text.includes('�������') ||
-                          text.includes('���� ������') || text.includes('��� ����');
-        
-        // Dashboard success indicators (even if URL didn't change - SPA navigation)
-        const hasDashboard = fullText.includes('Current Balance') || 
-                             fullText.includes('Remaining') ||
-                             fullText.includes('Used') ||
-                             !!document.querySelector('[class*="balance"]') ||
-                             !!document.querySelector('[class*="dashboard"]') ||
-                             !!document.querySelector('[class*="quota"]');
-        
-        // Still on login form?
-        const stillOnLogin = fullText.includes('Service number') || 
-                             fullText.includes('Select Type') ||
-                             !!document.querySelector('#login_loginid_input_01');
-        
-        // VERBOSE DEBUG DATA
-        const debugInfo = {
-          modalCount: document.querySelectorAll('.ant-modal, [class*="modal"]').length,
-          buttonCount: document.querySelectorAll('button:not([disabled])').length,
-          inputCount: document.querySelectorAll('input[type="text"], input[type="password"]').length,
-          bodyLength: fullText.length,
-          firstLines: fullText.split('\n').slice(0, 8).join(' | ').slice(0, 300)
-        };
-        
-        return { hasCaptcha, isBlocked, hasDashboard, stillOnLogin, text: text.slice(0, 200), debugInfo };
+                          text.includes('blocked') || text.includes('محاولات') ||
+                          text.includes('الحد الاقصى') || text.includes('مره اخرى');
+        return { hasCaptcha, isBlocked, text: text.slice(0, 200) };
       });
-
-      // VERBOSE LOGGING - Every 1 second (10 ticks � 100ms)
-      if (tick % 10 === 0) {
-        const elapsed = (tick * 0.1).toFixed(1);
-        console.log(`  [DEBUG ${elapsed}s] cap:${pageState.hasCaptcha} dash:${pageState.hasDashboard} login:${pageState.stillOnLogin} block:${pageState.isBlocked} | modals:${pageState.debugInfo.modalCount} btns:${pageState.debugInfo.buttonCount}`);
-        
-        // Every 5 seconds, show page content
-        if (tick > 0 && tick % 50 === 0) {
-          console.log(`    ? Page content: ${pageState.debugInfo.firstLines}`);
-        }
-      }
-
-      // Priority 1: CAPTCHA detected (INSTANT - within first 100ms!)
-      if (pageState.hasCaptcha || captchaRequestFired) {
-        postLoginState = 'captcha';
-        const detectionTime = (tick * 0.1).toFixed(1);
-        console.log(`  [CAPTCHA] ? INSTANT DETECTION at ${detectionTime}s (tick ${tick})`);
-        break;
-      }
-
-      // Priority 2: Dashboard detected (SUCCESS - even if URL didn't change)
-      if (pageState.hasDashboard && !pageState.stillOnLogin) {
-        postLoginState = 'navigated';
-        console.log('  [OK] Dashboard detected (SPA navigation succeeded)');
-        break;
-      }
-
-      // Priority 3: Block message detected
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
         console.log('  [BLOCKED] WE has blocked this IP/account temporarily');
         console.log('  [BLOCKED] Page text:', pageState.text.slice(0, 150));
         break;
       }
-      
-      // Standard progress log (every 3 seconds)
-      if (tick > 0 && tick % 30 === 0) {
-        const seconds = Math.round(tick * 0.1);
-        console.log(`  Waiting... ${seconds} s`);
+      if (pageState.hasCaptcha) {
+        postLoginState = 'captcha';
+        console.log('  [CAPTCHA] Modal detected at', tick + 1, 'seconds');
+        break;
       }
-      
-      // RAPID POLL: 100ms instead of 1000ms
-      await sleep(100);
+      if (tick % 3 === 0) console.log('  Waiting...', tick + 1, 's');
+      await sleep(1000);
     }
 
-    // Handle blocked state � don't throw immediately, note it but try extraction anyway
-    // (Block message might be stale from previous run)
     if (postLoginState === 'blocked') {
-      console.log('  ??  Block message detected, but will attempt extraction anyway (might be stale)');
-      // Don't throw here - let extraction step determine if it's a real block
+      await clearCookies();
+      throw new Error('WE_BLOCKED: Account/IP temporarily blocked. Will auto-retry on next scheduled run.');
     }
 
     if (postLoginState === 'unknown') {
-      // FINAL DEBUG DUMP before giving up
-      console.log('  [FINAL DEBUG] Capturing page state before error...');
-      const finalDebug = await page.evaluate(() => {
-        return {
-          url: window.location.href,
-          title: document.title,
-          bodySnippet: document.body.innerText.slice(0, 500),
-          visibleModals: Array.from(document.querySelectorAll('.ant-modal, [class*="modal"]')).map(m => ({
-            visible: m.style.display !== 'none',
-            className: m.className
-          })),
-          allButtons: Array.from(document.querySelectorAll('button')).slice(0, 10).map(b => ({
-            text: b.textContent?.trim().slice(0, 30),
-            disabled: b.disabled,
-            visible: b.offsetParent !== null
-          }))
-        };
-      });
-      console.log('  [FINAL DEBUG]', JSON.stringify(finalDebug, null, 2));
-      
-      // Before giving up, do one final check for dashboard elements
-      const finalCheck = await page.evaluate(() => {
-        const text = document.body.innerText;
-        return text.includes('Current Balance') || text.includes('Remaining');
-      });
-      if (finalCheck) {
-        console.log('  [OK] Dashboard elements found on final check (slow SPA load)');
-        postLoginState = 'navigated';
-      } else {
-        throw new Error('Still on login page - no navigation, dashboard, captcha, or block after 25s');
-
-      }
+      throw new Error('Still on login page - no navigation or captcha after 20s');
     }
 
     // ======================================
     // CAPTCHA ENGINE v4 (only if captcha was detected)
     // ======================================
     if (postLoginState === 'captcha') {
+      console.log('  [CAPTCHA] Detection triggered, waiting for modal to render...');
+      
+      // FIX #1: Wait for modal to actually render in DOM before starting OCR
+      // Problem: CAPTCHA detected at tick 0, but modal takes 1-2s to render
+      // Solution: Poll for modal visibility for up to 3 seconds
+      let modalReady = false;
+      for (let w = 0; w < 30; w++) {
+        await sleep(100);
+        const isOpen = await page.evaluate(() => {
+          const modal = document.querySelector('.ant-modal-root .ant-modal-wrap');
+          const img = document.querySelector('img[src*="Captcha"]');
+          return modal && img && (!modal.style || modal.style.display !== 'none');
+        });
+        if (isOpen) {
+          modalReady = true;
+          console.log(`  [MODAL] Rendered after ${w * 100}ms`);
+          break;
+        }
+      }
+      
+      if (!modalReady) {
+        console.log('  [MODAL] Warning: Not visible after 3s, proceeding anyway...');
+      }
+      
       console.log('  [CAPTCHA] Ultimate Engine v5 starting...\n');
 
       // HELPER: Find the captcha image (largest img inside modal)
       // Accepts image even if naturalWidth===0 (lazy-load / slow server) as long as
-      // the element has visible dimensions � prevents "No valid captcha image" loops.
+      // the element has visible dimensions — prevents "No valid captcha image" loops.
       async function findCaptchaImg() {
         return await page.evaluateHandle(() => {
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
@@ -1094,7 +698,7 @@ async function harvestQuota() {
         });
       }
 
-      // HELPER: Canvas preprocessing � 18 filter modes for WE captcha
+      // HELPER: Canvas preprocessing — 18 filter modes for WE captcha
       async function canvasProcess(imgHandle, filter) {
         return await page.evaluate((imgEl, f) => {
           if (!imgEl) return null;
@@ -1117,7 +721,7 @@ async function harvestQuota() {
             const max = Math.max(r,g,b), min = Math.min(r,g,b);
             const sat = max === 0 ? 0 : (max - min) / max;
             let keep = false;
-            // ?? GROUP A: Color-based (WE captcha uses colored text on white/gray bg) ??
+            // ── GROUP A: Color-based (WE captcha uses colored text on white/gray bg) ──
             if      (f === 'colorOnly')   { keep = sat > 0.25 && lum < 220 && lum > 20; }
             else if (f === 'colorStrong') { keep = sat > 0.45 && lum < 200 && lum > 15; }
             else if (f === 'colorWide')   { keep = sat > 0.15 && lum < 230 && lum > 10; }
@@ -1126,16 +730,16 @@ async function harvestQuota() {
             else if (f === 'blue')        { keep = b > 100 && (b-r) > 30 && (b-g) > 20; }
             else if (f === 'green')       { keep = g > 100 && (g-r) > 30 && (g-b) > 30; }
             else if (f === 'notGray')     { keep = (max - min) > 40 && lum < 210; }
-            // ?? GROUP B: Luminance-based ??
+            // ── GROUP B: Luminance-based ──
             else if (f === 'dark')        { keep = lum < 140; }
             else if (f === 'dark2')       { keep = lum < 100; }
             else if (f === 'dark3')       { keep = lum < 170; }
             else if (f === 'midtone')     { keep = lum >= 60 && lum <= 180; }
-            // ?? GROUP C: Contrast / threshold ??
+            // ── GROUP C: Contrast / threshold ──
             else if (f === 'contrast')    { keep = sat > 0.3 && r > g; }
             else if (f === 'thresh128')   { keep = lum < 128; }
             else if (f === 'thresh160')   { keep = lum < 160; }
-            // ?? GROUP D: Channel-boost hybrids ??
+            // ── GROUP D: Channel-boost hybrids ──
             else if (f === 'rBoost')      { const rb = Math.min(255, r*1.4); keep = rb > 140 && (rb-g) > 25; }
             else if (f === 'gBoost')      { const gb2 = Math.min(255, g*1.4); keep = gb2 > 120 && (gb2-r) > 20; }
             else if (f === 'satBoost')    { keep = sat > 0.35 && lum < 190 && lum > 25; }
@@ -1146,7 +750,7 @@ async function harvestQuota() {
         }, imgHandle, filter);
       }
 
-      // HELPER: OCR with dual PSM modes � returns only results >= 5 chars
+      // HELPER: OCR with dual PSM modes — returns only results >= 5 chars
       async function ocrRead(imageData) {
         const Tesseract = require('tesseract.js');
         const results = [];
@@ -1185,7 +789,7 @@ async function harvestQuota() {
           setter.call(inp, ans);
           inp.dispatchEvent(new Event('input', { bubbles: true }));
           inp.dispatchEvent(new Event('change', { bubbles: true }));
-          // Find the OK/confirm button � NOT Cancel. Look for button with ok/confirm text,
+          // Find the OK/confirm button — NOT Cancel. Look for button with ok/confirm text,
           // or ant-btn-primary class, or the LAST button (Cancel is usually first, Ok is last)
           const allBtns = Array.from(modal.querySelectorAll('button'));
           const btn = allBtns.find(b => /ok|confirm|submit/i.test(b.textContent)) ||
@@ -1215,7 +819,7 @@ async function harvestQuota() {
         });
       }
 
-      // HELPER: Re-trigger captcha � full page reload + fresh login
+      // HELPER: Re-trigger captcha — full page reload + fresh login
       // (old button-click approach is unreliable after WE resets form state)
       async function doFullReLogin() {
         console.log('    [RETRIGGER] Full page reload + re-login...');
@@ -1290,7 +894,7 @@ async function harvestQuota() {
         'rBoost','gBoost','satBoost'
       ];
 
-      // Normalize OCR result for vote grouping � collapses common OCR confusion chars
+      // Normalize OCR result for vote grouping — collapses common OCR confusion chars
       function normalizeOCR(str) {
         return str.toUpperCase()
           .replace(/0/g, 'O')
@@ -1322,8 +926,24 @@ async function harvestQuota() {
             const result = await doFullReLogin();
             console.log('    [RETRIGGER] Result:', result);
             if (result === 'navigated') { captchaSolved = true; break; }
-            if (result === 'modal')     { modalReady = true; }
-            if (!modalReady) { console.log('    ! No modal after full re-login, skipping round'); continue; }
+            if (result === 'modal')     { 
+              // FIX #2: Wait for modal to actually render after retrigger
+              // Problem: Modal check happens too fast after re-login
+              // Solution: Poll for up to 5 seconds before considering it missing
+              console.log('    [RETRIGGER] Waiting for modal to render...');
+              let retriggerModalReady = false;
+              for (let w = 0; w < 50; w++) {
+                await sleep(100);
+                const isOpen = await isModalOpen();
+                if (isOpen) {
+                  retriggerModalReady = true;
+                  console.log(`    [RETRIGGER] Modal appeared after ${w * 100}ms`);
+                  break;
+                }
+              }
+              modalReady = retriggerModalReady;
+            }
+            if (!modalReady) { console.log('    ! No modal after full re-login (waited 5s), skipping round'); continue; }
           }
           await sleep(1500);
         }
@@ -1411,7 +1031,7 @@ async function harvestQuota() {
             console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / voted=' + filtersVoted + ')');
 
             if (confidence >= 80 || ocrAttempt >= 3) {
-              console.log('    [OCR] Confidence acceptable or max refreshes reached � proceeding to submit');
+              console.log('    [OCR] Confidence acceptable or max refreshes reached — proceeding to submit');
               break;
             } else {
               console.log('    [OCR] Confidence < 80%, will refresh captcha image');
@@ -1475,95 +1095,24 @@ async function harvestQuota() {
         await sleep(2000);
         throw new Error('Captcha unsolvable after 12 rounds - retrying login');
       }
-      
-      // ??????????????????????????????????????
-      // POST-CAPTCHA NAVIGATION VERIFICATION
-      // CRITICAL: Wait for dashboard to load before proceeding!
-      // ??????????????????????????????????????
-      console.log('  [POST-CAPTCHA] Waiting for dashboard navigation...');
-      
-      let dashboardReached = false;
-      let interstitialPageDetected = false;
-      
-      for (let tick = 0; tick < 300; tick++) { // 30 seconds max (300 � 100ms)
-        const currentUrl = page.url();
-        
-        // Check page state
-        const pageCheck = await page.evaluate(() => {
-          const text = document.body.innerText;
-          const url = window.location.href;
-          const hasLoginForm = !!document.querySelector('#login_loginid_input_01');
-          const hasDashboard = text.includes('Current Balance') || 
-                               text.includes('Remaining') ||
-                               text.includes('Used') ||
-                               !!document.querySelector('[class*="balance"]');
-          
-          // Detect interstitial/promo pages (anonymoustopup, promotions, ads, etc.)
-          const isInterstitial = url.includes('anonymoustopup') || 
-                                 url.includes('promotion') ||
-                                 url.includes('offer') ||
-                                 url.includes('topup') ||
-                                 (url.includes('echannel') && !url.includes('login') && !hasDashboard);
-          
-          return { hasLoginForm, hasDashboard, isInterstitial, url };
-        });
-        
-        // Interstitial page detected (e.g. /anonymoustopup) - navigate to dashboard
-        if (pageCheck.isInterstitial && !interstitialPageDetected) {
-          interstitialPageDetected = true;
-          const waitTime = (tick * 0.1).toFixed(1);
-          console.log(`  ??  Interstitial page detected after ${waitTime}s: ${pageCheck.url}`);
-          console.log('  ? Navigating to dashboard...');
-          
-          // Force navigate directly to accountoverview (correct dashboard URL)
-          await page.evaluate(() => {
-            window.location.hash = '#/accountoverview';
-          }).catch(() => {});
-          await sleep(3000);
-          continue;
-        }
-        
-        // Success: Dashboard loaded
-        if (pageCheck.hasDashboard && !pageCheck.hasLoginForm) {
-          dashboardReached = true;
-          const waitTime = (tick * 0.1).toFixed(1);
-          console.log(`  ? Dashboard reached after ${waitTime}s`);
-          break;
-        }
-        
-        // Failure: Redirected back to login
-        if (pageCheck.hasLoginForm && !pageCheck.hasDashboard) {
-          const waitTime = (tick * 0.1).toFixed(1);
-          console.log(`  ? Redirected to login after ${waitTime}s - CAPTCHA solve didn't authenticate`);
-          throw new Error('Post-CAPTCHA redirect to login - authentication failed');
-        }
-        
-        // Log progress
-        if (tick > 0 && tick % 30 === 0) {
-          console.log(`    Waiting for dashboard... ${Math.round(tick * 0.1)}s`);
-        }
-        
-        await sleep(100);
-      }
-      
-      if (!dashboardReached) {
-        const finalUrl = page.url();
-        throw new Error(`Dashboard did not load within 30s after CAPTCHA solve. Final URL: ${finalUrl}`);
-      }
     }
 
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 2: SERVICE NUMBER (USERNAME)');
-    // ??????????????????????????????????????
-    console.log('  ? Login successful!\n');
+    // ══════════════════════════════════════
+    console.log('  ✓ Login successful!\n');
 
-    // NOTE: Cookie save moved to AFTER line switch + dashboard verification (below)
-    // to prevent saving invalid cookies when CAPTCHA solve doesn't actually authenticate
+    // Save session cookies for next run
+    try {
+      const cookies = await page.cookies();
+      const relevantCookies = cookies.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
+      if (relevantCookies.length > 0) await saveCookies(relevantCookies);
+    } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
 
     } // end if (!sessionValid)
 
-    // ?? dismissAds: close any overlay/ad/popup before line switch ??????????
+    // ── dismissAds: close any overlay/ad/popup before line switch ──────────
     async function dismissAds() {
       try {
         const dismissed = await page.evaluate(() => {
@@ -1597,11 +1146,11 @@ async function harvestQuota() {
       } catch(e) { console.log('  [dismissAds] Non-fatal:', e.message); }
     }
     await dismissAds();
-    // ????????????????????????????????????????????????????????????????????????
+    // ────────────────────────────────────────────────────────────────────────
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 5.5: LINE SWITCHER (Dokki)');
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('  Switching to line 0237600094...');
 
     // FORCE NAVIGATION: WE sometimes redirects to wrong page after login.
@@ -1615,13 +1164,13 @@ async function harvestQuota() {
       const newUrl = page.url();
       console.log('  [NAVIGATE] New URL:', newUrl);
       if (newUrl.includes('login')) {
-        throw new Error('WE forced redirect to login after navigation � possible session block');
+        throw new Error('WE forced redirect to login after navigation — possible session block');
       }
     }
 
     // CRITICAL: The WE portal does a session refresh after line switch that can
     // redirect back to #/login within seconds. The only reliable approach is to
-    // extract the data THE MOMENT we confirm the correct page is showing �
+    // extract the data THE MOMENT we confirm the correct page is showing —
     // before the redirect can happen. We capture data inside the switcher itself.
 
     // Helper: extract all quota data from the current page state
@@ -1743,7 +1292,7 @@ async function harvestQuota() {
     let switcherCapturedData = null;
 
     await tryMethods([
-      // M1: Click dropdown ? select 0237600094 ? capture data immediately on confirmation
+      // M1: Click dropdown → select 0237600094 → capture data immediately on confirmation
       async () => {
         await page.waitForFunction(() => {
           const t = document.body.innerText;
@@ -1774,7 +1323,7 @@ async function harvestQuota() {
         if (!clicked) throw new Error('Option 0237600094 not found');
         console.log('    Clicked:', clicked);
 
-        // Poll aggressively � capture data THE MOMENT the page shows 0237600094 AND full data loaded
+        // Poll aggressively — capture data THE MOMENT the page shows 0237600094 AND full data loaded
         for (let w = 0; w < 30; w++) {
           await sleep(1000);
           const url = page.url();
@@ -1797,30 +1346,30 @@ async function harvestQuota() {
               const totalGB = (captured.remaining || 0) + (captured.used || 0);
               if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
                 switcherCapturedData = captured;
-                console.log('    ? M1 FULL DATA CAPTURED: remaining=' + captured.remaining + ' used=' + captured.used + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance + ' plan=' + captured.plan);
+                console.log('    ✓ M1 FULL DATA CAPTURED: remaining=' + captured.remaining + ' used=' + captured.used + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance + ' plan=' + captured.plan);
                 return; // SUCCESS
               } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 � WRONG LINE (093), waiting for 094...');
+                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093), waiting for 094...');
               } else if (captured.balance === 0) {
-                console.log('    ? (' + (w+1) + 's) Balance=0, page still loading... rem=' + captured.remaining);
+                console.log('    ⏳ (' + (w+1) + 's) Balance=0, page still loading... rem=' + captured.remaining);
               } else if (captured.plan === 'Unknown') {
-                console.log('    ? (' + (w+1) + 's) Plan=Unknown, page still rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
+                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, page still rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
               } else if (totalGB <= 300) {
-                console.log('    ? (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094?) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) � waiting for full 094 data...');
+                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094✓) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) — waiting for full 094 data...');
               } else {
-                console.log('    ? (' + (w+1) + 's) Data incomplete, waiting... rem=' + captured.remaining + ' bal=' + captured.balance + ' total=' + totalGB.toFixed(1));
+                console.log('    ⏳ (' + (w+1) + 's) Data incomplete, waiting... rem=' + captured.remaining + ' bal=' + captured.balance + ' total=' + totalGB.toFixed(1));
               }
             } else {
-              console.log('    ? (' + (w+1) + 's) extractNow returned null, waiting...');
+              console.log('    ⏳ (' + (w+1) + 's) extractNow returned null, waiting...');
             }
           } else {
-            console.log('    ? (' + (w+1) + 's) URL:' + url.split('#')[1] + ' | has094:' + check.has094 + ' | hasRem:' + check.hasRemaining + ' | bal:' + check.balNum);
+            console.log('    ⏳ (' + (w+1) + 's) URL:' + url.split('#')[1] + ' | has094:' + check.has094 + ' | hasRem:' + check.hasRemaining + ' | bal:' + check.balNum);
           }
         }
         throw new Error('M1: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 30s');
       },
 
-      // M2: Broad evaluate click ? same capture strategy
+      // M2: Broad evaluate click → same capture strategy
       async () => {
         await sleep(2000);
         // Try all possible selectors for the dropdown
@@ -1853,20 +1402,20 @@ async function harvestQuota() {
               const totalGB = (captured.remaining || 0) + (captured.used || 0);
               if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
                 switcherCapturedData = captured;
-                console.log('    ? M2 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
+                console.log('    ✓ M2 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
                 return;
               } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 � WRONG LINE (093)');
+                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
               } else if (captured.balance === 0) {
-                console.log('    ? (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
+                console.log('    ⏳ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
               } else if (captured.plan === 'Unknown') {
-                console.log('    ? (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
+                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
               } else if (totalGB <= 300) {
-                console.log('    ? (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '? but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
+                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '✓ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
               }
             }
           } else {
-            console.log('    ? (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
+            console.log('    ⏳ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
           }
         }
         throw new Error('M2: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
@@ -1890,233 +1439,104 @@ async function harvestQuota() {
               const totalGB = (captured.remaining || 0) + (captured.used || 0);
               if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
                 switcherCapturedData = captured;
-                console.log('    ? M3 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
+                console.log('    ✓ M3 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
                 return;
               } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ? (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 � WRONG LINE (093)');
+                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
               } else if (captured.balance === 0) {
-                console.log('    ? (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
+                console.log('    ⏳ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
               } else if (captured.plan === 'Unknown') {
-                console.log('    ? (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
+                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
               } else if (totalGB <= 300) {
-                console.log('    ? (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '? but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
+                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '✓ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
               }
             }
           } else {
-            console.log('    ? (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
+            console.log('    ⏳ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
           }
         }
         throw new Error('M3: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
       }
     ], 'LINE SWITCHER', 45000);
 
-    console.log('  ? Switched to 0237600094 | captured data:', switcherCapturedData ? 'YES' : 'NO');
+    console.log('  ✓ Switched to 0237600094 | captured data:', switcherCapturedData ? 'YES' : 'NO');
     console.log('  Current URL:', page.url(), '\n');
 
-    // ??????????????????????????????????????
-    console.log('STEP 6: PERSISTENT EXTRACTION (7 cycles with refresh)');
-    // ??????????????????????????????????????
-
-    // ??????????????????????????????????????
-    // SAVE SESSION COOKIES (MOVED HERE - after line switch + dashboard verification)
-    // Only save cookies if we successfully reached dashboard with correct line
-    // ??????????????????????????????????????
-    try {
-      const cookies = await page.cookies();
-      const relevantCookies = cookies.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
-      if (relevantCookies.length > 0) {
-        await saveCookies(relevantCookies);
-        console.log('  [SESSION] ? Valid session cookies saved (dashboard + line 094 verified)\n');
-      }
-    } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
+    // ══════════════════════════════════════
+    console.log('STEP 6: EXTRACT');
+    // ══════════════════════════════════════
 
     // Use pre-captured data from switcher if available (avoids race condition with redirect)
     // Only fall through to live extraction if switcher didn't capture data
-    let data = null;
-    
-    if (switcherCapturedData) {
+    const data = switcherCapturedData ? await (async () => {
       console.log('  [FAST PATH] Using data captured during line switch (race-condition safe)');
-      console.log('    Pre-captured during line switch');
-      data = switcherCapturedData;
-    } else {
-      // Switcher didn't capture data � do persistent extraction with 7 cycles
-      const MAX_EXTRACTION_CYCLES = 7;
-      
-      for (let cycle = 1; cycle <= MAX_EXTRACTION_CYCLES; cycle++) {
-        try {
-          console.log(`\n  --- EXTRACTION CYCLE ${cycle}/${MAX_EXTRACTION_CYCLES} ---`);
-          
-          // ??????????????????????????????????????
-          // PRE-EXTRACTION PAGE VERIFICATION
-          // Ensure we're on dashboard before attempting to extract
-          // ??????????????????????????????????????
-          const currentUrl = page.url();
-          const pageVerification = await page.evaluate(() => {
-            const text = document.body.innerText;
-            const hasLoginForm = !!document.querySelector('#login_loginid_input_01') || 
-                                 text.includes('Service number') ||
-                                 text.includes('Select Type');
-            const hasDashboard = text.includes('Current Balance') || 
-                                 text.includes('Remaining') ||
-                                 !!document.querySelector('[class*="balance"]');
-            return { hasLoginForm, hasDashboard, url: window.location.href };
-          });
-          
-          if (pageVerification.hasLoginForm && !pageVerification.hasDashboard) {
-            console.log(`  ? ERROR: Still on login page (${pageVerification.url})`);
-            console.log('  Session expired or redirect occurred - cannot extract from login form');
-            throw new Error('SESSION_EXPIRED: Redirected to login page during extraction');
+      console.log('    M1 numeric-only sibling scan');
+      return switcherCapturedData;
+    })() : await tryMethods([
+      // M1: Walk ALL spans/divs — numeric sibling scan
+      async () => {
+        await sleep(2000);
+        const result = await page.evaluate(() => {
+          const spans = Array.from(document.querySelectorAll('span, div, p'));
+          let remaining = null, used = null, balance = null, plan = null;
+          function isNumericText(t) {
+            if (!t) return false;
+            const s = t.replace(/,/g, '').trim();
+            return /^\d+(\.\d+)?$/.test(s) && !s.startsWith('0237') && !s.startsWith('023');
           }
-          
-          if (!pageVerification.hasDashboard) {
-            console.log(`  ??  WARNING: Dashboard elements not detected on page`);
-            console.log(`  URL: ${pageVerification.url}`);
-            console.log('  Attempting extraction anyway (might be slow-loading dashboard)...');
-          } else {
-            console.log(`  ? Page verification: On dashboard`);
+          for (let i = 0; i < spans.length; i++) {
+            const t = spans[i].innerText?.trim();
+            if (!t || t.length > 100) continue;
+            if (t === 'Remaining') { for (let b=1;b<=3;b++) { const c=spans[i-b]?.innerText?.trim(); if(isNumericText(c)){remaining=c;break;} } }
+            if (t === 'Used')      { for (let b=1;b<=3;b++) { const c=spans[i-b]?.innerText?.trim(); if(isNumericText(c)){used=c;break;} } }
+            if (t === 'Current Balance') { for (let f=1;f<=5;f++) { const c=spans[i+f]?.innerText?.trim(); if(isNumericText(c)){balance=c;break;} } }
+            if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
           }
-          
-          // CRITICAL: Before each extraction cycle, re-switch to line 094
-          // (Page might have reverted to 093 during refresh)
-          if (cycle > 1) {
-            console.log('  Re-switching to line 0237600094 before extraction...');
-            await tryMethods([
-              async () => {
-                const selector = await page.$('select');
-                if (selector) {
-                  await page.select('select', '0237600094');
-                  await sleep(3000); // Wait for line switch
-                  console.log('    ? Line re-switched via select');
-                }
-              }
-            ], 'RE-SWITCH', 10000).catch(e => console.log('    [WARN] Re-switch failed:', e.message));
-          }
-          
-          data = await tryMethods([
-            // M1: Walk ALL spans/divs � numeric sibling scan
-            async () => {
-              await sleep(2000);
-              const result = await page.evaluate(() => {
-                const spans = Array.from(document.querySelectorAll('span, div, p'));
-                let remaining = null, used = null, balance = null, plan = null;
-                function isNumericText(t) {
-                  if (!t) return false;
-                  const s = t.replace(/,/g, '').trim();
-                  return /^\d+(\.\d+)?$/.test(s) && !s.startsWith('0237') && !s.startsWith('023');
-                }
-                for (let i = 0; i < spans.length; i++) {
-                  const t = spans[i].innerText?.trim();
-                  if (!t || t.length > 100) continue;
-                  if (t === 'Remaining') { for (let b=1;b<=3;b++) { const c=spans[i-b]?.innerText?.trim(); if(isNumericText(c)){remaining=c;break;} } }
-                  if (t === 'Used')      { for (let b=1;b<=3;b++) { const c=spans[i-b]?.innerText?.trim(); if(isNumericText(c)){used=c;break;} } }
-                  if (t === 'Current Balance') { for (let f=1;f<=5;f++) { const c=spans[i+f]?.innerText?.trim(); if(isNumericText(c)){balance=c;break;} } }
-                  if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
-                }
-                if (!remaining) throw new Error('no remaining found');
-                return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
-              });
-              const parsed = { remaining: stripNum(result.remaining), used: stripNum(result.used)||0, balance: stripNum(result.balance)||0, plan: result.plan };
-              if (!parsed.remaining && parsed.remaining !== 0) throw new Error('no data after stripNum');
-              console.log('    M1 numeric-only sibling scan');
-              return parsed;
-            },
-            // M2: Full page text regex
-            async () => {
-              await sleep(5000);
-              const result = await page.evaluate(() => {
-                const text = document.body.innerText;
-                const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
-                const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
-                const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i) || text.match(/([\d,]+\.?\d+)\s*EGP/i);
-                const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
-                if (!r) throw new Error('no remaining in page text');
-                return { remaining: r[1], used: u?.[1]||'0', balance: b?.[1]||'0', plan: p?.[0]?.trim()||'Unknown' };
-              });
-              const parsed = { remaining: stripNum(result.remaining), used: stripNum(result.used)||0, balance: stripNum(result.balance)||0, plan: result.plan };
-              if (!parsed.remaining) throw new Error('no data M2');
-              console.log('    M2 page text regex');
-              return parsed;
-            },
-            // M3: HTML source regex fallback
-            async () => {
-              await sleep(8000);
-              const html = await withTimeout(page.content(), 8000, 'page.content');
-              const r = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Remaining/i);
-              const u = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Used/i);
-              const b = html.match(/>([\d,]+\.?\d+)\s*EGP</i);
-              if (!r) throw new Error('no data in html');
-              return { remaining: stripNum(r[1]), used: stripNum(u?.[1])||0, balance: stripNum(b?.[1])||0, plan: 'Unknown' };
-            }
-          ], 'EXTRACT', 30000);
-          
-          // SUCCESS!
-          console.log(`  ? Extraction succeeded on cycle ${cycle}!`);
-          break;
-          
-        } catch (extractError) {
-          console.log(`  ? Cycle ${cycle} failed: ${extractError.message}`);
-          
-          if (cycle < MAX_EXTRACTION_CYCLES) {
-            console.log(`  ? Refreshing page and retrying... (${MAX_EXTRACTION_CYCLES - cycle} cycles remaining)`);
-            await sleep(3000);
-            await page.reload({ waitUntil: 'networkidle2', timeout: 30000 }).catch(e => {
-              console.log('    [WARN] Reload timeout, continuing anyway');
-            });
-            await sleep(5000); // Wait for dashboard to fully load after refresh
-            
-            // ??????????????????????????????????????
-            // POST-REFRESH SESSION VERIFICATION
-            // Check if reload redirected us back to login (session expired)
-            // ??????????????????????????????????????
-            const postRefreshUrl = page.url();
-            if (postRefreshUrl.includes('/login') || postRefreshUrl.includes('#/login')) {
-              console.log('  ? CRITICAL: Page refresh redirected to login page');
-              console.log('  Session expired during extraction - saved cookies are invalid');
-              
-              // Clear invalid cookies
-              await clearCookies();
-              
-              throw new Error('SESSION_EXPIRED: Refresh redirected to login - re-login required on next attempt');
-            }
-            
-            // Verify dashboard is still present
-            const postRefreshCheck = await page.evaluate(() => {
-              const text = document.body.innerText;
-              return text.includes('Current Balance') || text.includes('Remaining');
-            });
-            
-            if (!postRefreshCheck) {
-              console.log('  ??  WARNING: Dashboard elements not found after refresh');
-              console.log('  URL:', postRefreshUrl);
-              console.log('  Session might be expired - will try extraction anyway');
-            } else {
-              console.log('  ? Post-refresh verification: Dashboard still loaded');
-            }
-            
-          } else {
-            // All cycles exhausted
-            throw new Error(`EXTRACTION FAILED after ${MAX_EXTRACTION_CYCLES} cycles: ${extractError.message}`);
-          }
-        }
+          if (!remaining) throw new Error('no remaining found');
+          return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
+        });
+        const parsed = { remaining: stripNum(result.remaining), used: stripNum(result.used)||0, balance: stripNum(result.balance)||0, plan: result.plan };
+        if (!parsed.remaining && parsed.remaining !== 0) throw new Error('no data after stripNum');
+        console.log('    M1 numeric-only sibling scan');
+        return parsed;
+      },
+      // M2: Full page text regex
+      async () => {
+        await sleep(5000);
+        const result = await page.evaluate(() => {
+          const text = document.body.innerText;
+          const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
+          const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
+          const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i) || text.match(/([\d,]+\.?\d+)\s*EGP/i);
+          const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
+          if (!r) throw new Error('no remaining in page text');
+          return { remaining: r[1], used: u?.[1]||'0', balance: b?.[1]||'0', plan: p?.[0]?.trim()||'Unknown' };
+        });
+        const parsed = { remaining: stripNum(result.remaining), used: stripNum(result.used)||0, balance: stripNum(result.balance)||0, plan: result.plan };
+        if (!parsed.remaining) throw new Error('no data M2');
+        console.log('    M2 page text regex');
+        return parsed;
+      },
+      // M3: HTML source regex fallback
+      async () => {
+        await sleep(8000);
+        const html = await withTimeout(page.content(), 8000, 'page.content');
+        const r = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Remaining/i);
+        const u = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Used/i);
+        const b = html.match(/>([\d,]+\.?\d+)\s*EGP</i);
+        if (!r) throw new Error('no data in html');
+        return { remaining: stripNum(r[1]), used: stripNum(u?.[1])||0, balance: stripNum(b?.[1])||0, plan: 'Unknown' };
       }
-    }
-    
-    if (!data) {
-      throw new Error('Extraction completed but no data was captured (should not happen)');
-    }
+    ], 'EXTRACT', 30000);
 
-    console.log('\n  ??????????????????????????????????????');
-    console.log('  ?? EXTRACTED DATA:');
-    console.log('  ??????????????????????????????????????');
     console.log('  Remaining:', data.remaining, 'GB');
     console.log('  Used:', data.used, 'GB');
     console.log('  Balance:', data.balance, 'EGP');
-    console.log('  Plan:', data.plan);
-    console.log('  ??????????????????????????????????????\n');
+    console.log('  Plan:', data.plan, '\n');
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 7: FIRESTORE');
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     const now = new Date().toISOString();
     const fields = {
       'dokki': { mapValue: { fields: {
@@ -2126,7 +1546,7 @@ async function harvestQuota() {
         used:     { doubleValue: data.used },
         plan:     { stringValue: data.plan },
         updatedAt: { stringValue: now },
-        updatedBy: { stringValue: 'GitHub Cloud ? Dokki' },
+        updatedBy: { stringValue: 'GitHub Cloud ⚡ Dokki' },
         status:   { stringValue: 'success' }
       }}},
       lastUpdate: { stringValue: now }
@@ -2156,14 +1576,14 @@ async function harvestQuota() {
       }
     ], 'FIRESTORE', 20000);
 
-    console.log('  ? Uploaded to quota_latest!\n');
+    console.log('  ✓ Uploaded to quota_latest!\n');
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 8: LEDGER (quota_history)');
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     const historyFields = {
       timestamp: { stringValue: now },
-      user: { stringValue: 'GitHub Cloud ? Dokki' },
+      user: { stringValue: 'GitHub Cloud ⚡ Dokki' },
       notes: { stringValue: '' },
       dokki: { mapValue: { fields: {
         quota: { doubleValue: data.remaining },
@@ -2195,14 +1615,14 @@ async function harvestQuota() {
       }
     ], 'LEDGER', 20000);
 
-    console.log('  ? Ledger updated!\n');
+    console.log('  ✓ Ledger updated!\n');
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 8.5: LOW QUOTA FLAG');
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     // Write flag to Firestore quota_settings/alerts
-    // dokki_low: true  ? hourly workflow will run full harvest
-    // dokki_low: false ? hourly workflow will skip (normal 2h schedule handles it)
+    // dokki_low: true  → hourly workflow will run full harvest
+    // dokki_low: false → hourly workflow will skip (normal 2h schedule handles it)
     try {
       const isLowDokki = data.remaining < 100;
       const alertFields = {
@@ -2218,17 +1638,17 @@ async function harvestQuota() {
         body: JSON.stringify({ fields: alertFields })
       });
       if (alertRes.ok) {
-        console.log('  ? Low quota flag set: dokki_low=' + isLowDokki + ' (' + data.remaining.toFixed(1) + ' GB)\n');
+        console.log('  ✓ Low quota flag set: dokki_low=' + isLowDokki + ' (' + data.remaining.toFixed(1) + ' GB)\n');
       } else {
-        console.log('  ? Flag write failed (non-critical): HTTP ' + alertRes.status);
+        console.log('  ⚠ Flag write failed (non-critical): HTTP ' + alertRes.status);
       }
     } catch(e) {
-      console.log('  ? Flag write error (non-critical):', e.message);
+      console.log('  ⚠ Flag write error (non-critical):', e.message);
     }
 
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     console.log('STEP 9: TELEGRAM');
-    // ??????????????????????????????????????
+    // ══════════════════════════════════════
     try {
       const date = new Date().toLocaleString('en-GB', {
         timeZone: 'Africa/Cairo',
@@ -2239,22 +1659,22 @@ async function harvestQuota() {
       // Quota alert level
       const rem = data.remaining;
       let alertLine = '';
-      if (rem < 30)       alertLine = '\n?? *CRITICAL � Under 30 GB! Recharge immediately!*';
-      else if (rem < 50)  alertLine = '\n?? *CRITICAL � Under 50 GB!*';
-      else if (rem < 100) alertLine = '\n?? *WARNING � Under 100 GB*';
+      if (rem < 30)       alertLine = '\n🚨 *CRITICAL — Under 30 GB! Recharge immediately!*';
+      else if (rem < 50)  alertLine = '\n🔴 *CRITICAL — Under 50 GB!*';
+      else if (rem < 100) alertLine = '\n🟠 *WARNING — Under 100 GB*';
 
       // Status icon based on level
-      const statusIcon = rem < 50 ? '??' : rem < 100 ? '??' : '?';
+      const statusIcon = rem < 50 ? '🔴' : rem < 100 ? '🟠' : '✅';
 
       const msg = [
-        '?? *Cairo Taj � Dokki Harvest*',
+        '📡 *Cairo Taj — Dokki Harvest*',
         '',
         `${statusIcon} Quota Remaining: *${rem.toFixed(2)} GB*`,
-        `?? Used: *${data.used.toFixed(2)} GB*`,
-        `?? Balance: *${data.balance.toFixed(2)} EGP*`,
-        `?? Plan: ${data.plan}`,
-        `?? ${date}`,
-        `?? GitHub Cloud ? Dokki` + alertLine
+        `📉 Used: *${data.used.toFixed(2)} GB*`,
+        `💰 Balance: *${data.balance.toFixed(2)} EGP*`,
+        `📋 Plan: ${data.plan}`,
+        `🕐 ${date}`,
+        `🤖 GitHub Cloud ⚡ Dokki` + alertLine
       ].join('\n');
 
       const tgUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
@@ -2272,16 +1692,16 @@ async function harvestQuota() {
           body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' })
         });
         if (tgRes.ok) { tgSuccess = true; }
-        else { console.log('  ? Telegram to ' + chatId + ': HTTP ' + tgRes.status); }
+        else { console.log('  ⚠ Telegram to ' + chatId + ': HTTP ' + tgRes.status); }
       }
       if (!tgSuccess) throw new Error('All Telegram sends failed');
-      console.log('  ? Telegram sent!\n');
+      console.log('  ✓ Telegram sent!\n');
 
-      // CRITICAL ALERT: Under 30 GB � send a separate urgent message
+      // CRITICAL ALERT: Under 30 GB — send a separate urgent message
       if (rem < 30) {
         const criticalMsg = {
-          text: ['?????? *CRITICAL QUOTA ALERT* ??????', '', '?? *Cairo Taj � Dokki*',
-            `?? Only *${rem.toFixed(2)} GB* remaining!`, '?? *ACTION REQUIRED: Recharge immediately!*', '', `?? ${date}`].join('\n'),
+          text: ['🚨🚨🚨 *CRITICAL QUOTA ALERT* 🚨🚨🚨', '', '⚠️ *Cairo Taj — Dokki*',
+            `📉 Only *${rem.toFixed(2)} GB* remaining!`, '🔴 *ACTION REQUIRED: Recharge immediately!*', '', `🕐 ${date}`].join('\n'),
           parse_mode: 'Markdown',
           disable_notification: false
         };
@@ -2290,26 +1710,26 @@ async function harvestQuota() {
           await fetch(tgUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...criticalMsg, chat_id: chatId }) });
         }
-        console.log('  ?? Critical alert sent!\n');
+        console.log('  🚨 Critical alert sent!\n');
       }
 
     } catch (e) {
       // Telegram failure should NOT fail the whole harvest
-      console.log('  ? Telegram failed (non-critical):', e.message);
+      console.log('  ⚠ Telegram failed (non-critical):', e.message);
     }
-    console.log('????????????????????????????????????????');
-    console.log('? ? ?  SUCCESS  ? ? ?');
-    console.log('????????????????????????????????????????');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('✅ ✅ ✅  SUCCESS  ✅ ✅ ✅');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-    // ??????????????????????????????????????????????????????????????
-    // VIGILANCE MODE � triggered when quota ? 50 GB (Dokki)
+    // ══════════════════════════════════════════════════════════════
+    // VIGILANCE MODE — triggered when quota ≤ 50 GB (Dokki)
     // Stays in same session, refreshes every 13 minutes, harvests
-    // until quota ? 2 GB or session dies (then restarts + re-switches line).
-    // Only sends Telegram for Dokki � other line unaffected.
-    // ??????????????????????????????????????????????????????????????
+    // until quota ≤ 2 GB or session dies (then restarts + re-switches line).
+    // Only sends Telegram for Dokki — other line unaffected.
+    // ══════════════════════════════════════════════════════════════
     if (data.remaining <= 50) {
-      console.log('\n?? VIGILANCE MODE ACTIVATED (DOKKI) � quota=' + data.remaining.toFixed(2) + ' GB ? 50 GB');
-      console.log('  Will harvest every 13 min until quota ? 2 GB or job time limit reached.\n');
+      console.log('\n🔴 VIGILANCE MODE ACTIVATED (DOKKI) — quota=' + data.remaining.toFixed(2) + ' GB ≤ 50 GB');
+      console.log('  Will harvest every 13 min until quota ≤ 2 GB or job time limit reached.\n');
 
       const VIGILANCE_INTERVAL_MS = 13 * 60 * 1000;
       const VIGILANCE_MAX_MS      = 5 * 60 * 60 * 1000 + 45 * 60 * 1000;
@@ -2318,7 +1738,7 @@ async function harvestQuota() {
       let   vigilanceRound        = 0;
       let   lastRemaining         = data.remaining;
 
-      // ?? Helper: refresh to account overview and re-switch to line 094 ??
+      // ── Helper: refresh to account overview and re-switch to line 094 ──
       async function vigilanceRefreshPage() {
         await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 30000 });
         await sleep(3000);
@@ -2353,7 +1773,7 @@ async function harvestQuota() {
             if (captured) {
               const totalGB = (captured.remaining || 0) + (captured.used || 0);
               if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                console.log('  ? [VIGILANCE] Line 094 confirmed: rem=' + captured.remaining + ' bal=' + captured.balance);
+                console.log('  ✓ [VIGILANCE] Line 094 confirmed: rem=' + captured.remaining + ' bal=' + captured.balance);
                 return captured;
               }
             }
@@ -2362,7 +1782,7 @@ async function harvestQuota() {
         throw new Error('Line 094 data not confirmed after 30s');
       }
 
-      // ?? Helper: write to Firestore (Dokki only) ??
+      // ── Helper: write to Firestore (Dokki only) ──
       async function vigilanceFirestore(vData) {
         const vNow = new Date().toISOString();
         const vFields = {
@@ -2373,7 +1793,7 @@ async function harvestQuota() {
             used:      { doubleValue: vData.used },
             plan:      { stringValue: vData.plan },
             updatedAt: { stringValue: vNow },
-            updatedBy: { stringValue: 'GitHub Cloud ? Dokki [VIGILANCE]' },
+            updatedBy: { stringValue: 'GitHub Cloud ⚡ Dokki [VIGILANCE]' },
             status:    { stringValue: 'success' }
           }}},
           lastUpdate: { stringValue: vNow }
@@ -2384,7 +1804,7 @@ async function harvestQuota() {
         if (!res.ok) throw new Error('Firestore HTTP ' + res.status);
         const vHistory = {
           timestamp: { stringValue: vNow },
-          user: { stringValue: 'GitHub Cloud ? Dokki [VIGILANCE]' },
+          user: { stringValue: 'GitHub Cloud ⚡ Dokki [VIGILANCE]' },
           notes: { stringValue: 'vigilance-mode' },
           dokki: { mapValue: { fields: { quota: { doubleValue: vData.remaining }, balance: { doubleValue: vData.balance } } } },
           '104': { mapValue: { fields: { quota: { nullValue: null }, balance: { nullValue: null } } } },
@@ -2394,34 +1814,34 @@ async function harvestQuota() {
         await fetch(hUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: vHistory }) });
       }
 
-      // ?? Helper: send Vigilance Telegram (Dokki only) ??
+      // ── Helper: send Vigilance Telegram (Dokki only) ──
       async function vigilanceTelegram(vData, vRound, elapsed) {
         try {
           const rem = vData.remaining;
           const elapsedMin = Math.floor(elapsed / 60000);
           const burned = lastRemaining - rem;
           const burnRate = burned > 0 ? (burned / (elapsedMin / 60)).toFixed(2) : '0.00';
-          const hoursLeft = parseFloat(burnRate) > 0 ? (rem / parseFloat(burnRate)).toFixed(1) : '?';
+          const hoursLeft = parseFloat(burnRate) > 0 ? (rem / parseFloat(burnRate)).toFixed(1) : '∞';
           const date = new Date().toLocaleString('en-GB', {
             timeZone: 'Africa/Cairo', day: '2-digit', month: 'short',
             year: 'numeric', hour: '2-digit', minute: '2-digit'
           });
-          const icon = rem <= 2 ? '??' : rem <= 10 ? '??' : rem <= 20 ? '??' : '??';
-          const urgency = rem <= 2  ? '?? *STOP � 2 GB REACHED! Recharge NOW!*' :
-                          rem <= 5  ? '?? *CRITICAL � Under 5 GB!*' :
-                          rem <= 10 ? '?? *CRITICAL � Under 10 GB! Recharge soon!*' :
-                          rem <= 20 ? '?? *WARNING � Under 20 GB*' :
-                          rem <= 30 ? '?? *NOTICE � Under 30 GB*' : '';
+          const icon = rem <= 2 ? '🚨' : rem <= 10 ? '🔴' : rem <= 20 ? '🟠' : '🟡';
+          const urgency = rem <= 2  ? '🚨 *STOP — 2 GB REACHED! Recharge NOW!*' :
+                          rem <= 5  ? '🔴 *CRITICAL — Under 5 GB!*' :
+                          rem <= 10 ? '🔴 *CRITICAL — Under 10 GB! Recharge soon!*' :
+                          rem <= 20 ? '🟠 *WARNING — Under 20 GB*' :
+                          rem <= 30 ? '🟡 *NOTICE — Under 30 GB*' : '';
           const msg = [
-            '? *Cairo Taj � Dokki [VIGILANCE MODE]*',
+            '⚡ *Cairo Taj — Dokki [VIGILANCE MODE]*',
             '',
             icon + ' Quota: *' + rem.toFixed(2) + ' GB* remaining',
-            '?? Used: *' + vData.used.toFixed(2) + ' GB*',
-            '?? Balance: *' + vData.balance.toFixed(2) + ' EGP*',
-            '?? Burn rate: ~' + burnRate + ' GB/h',
-            '? Est. time left: ~' + hoursLeft + 'h',
-            '?? Vigilance round: #' + vRound + ' (' + elapsedMin + 'min in)',
-            '?? ' + date,
+            '📉 Used: *' + vData.used.toFixed(2) + ' GB*',
+            '💰 Balance: *' + vData.balance.toFixed(2) + ' EGP*',
+            '🔥 Burn rate: ~' + burnRate + ' GB/h',
+            '⏱ Est. time left: ~' + hoursLeft + 'h',
+            '🔄 Vigilance round: #' + vRound + ' (' + elapsedMin + 'min in)',
+            '🕐 ' + date,
             urgency
           ].filter(Boolean).join('\n');
           const tgUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
@@ -2434,9 +1854,9 @@ async function harvestQuota() {
           }
           if (rem <= 10) {
             const critMsg = {
-              text: ['?????? *VIGILANCE CRITICAL* ??????', '', '?? *Cairo Taj � Dokki*',
-                '?? Only *' + rem.toFixed(2) + ' GB* remaining!',
-                '?? *ACTION REQUIRED: Recharge immediately!*', '', '?? ' + date].join('\n'),
+              text: ['🚨🚨🚨 *VIGILANCE CRITICAL* 🚨🚨🚨', '', '⚠️ *Cairo Taj — Dokki*',
+                '📉 Only *' + rem.toFixed(2) + ' GB* remaining!',
+                '🔴 *ACTION REQUIRED: Recharge immediately!*', '', '🕐 ' + date].join('\n'),
               parse_mode: 'Markdown', disable_notification: false
             };
             for (const chatId of recipients) {
@@ -2445,13 +1865,13 @@ async function harvestQuota() {
                 body: JSON.stringify({ ...critMsg, chat_id: chatId }) });
             }
           }
-          console.log('  ? Vigilance Telegram sent (round #' + vRound + ')');
-        } catch(e) { console.log('  ? Vigilance Telegram failed (non-critical):', e.message); }
+          console.log('  ✓ Vigilance Telegram sent (round #' + vRound + ')');
+        } catch(e) { console.log('  ⚠ Vigilance Telegram failed (non-critical):', e.message); }
       }
 
-      // ?? Helper: full re-login + re-switch to 094 when session dies ??
+      // ── Helper: full re-login + re-switch to 094 when session dies ──
       async function vigilanceRestartSession() {
-        console.log('  [VIGILANCE] Session died � restarting fresh session...');
+        console.log('  [VIGILANCE] Session died — restarting fresh session...');
         try { await browser.close(); } catch(e) {}
         browser = await puppeteer.launch({
           headless: true, executablePath: '/usr/bin/google-chrome-stable',
@@ -2480,7 +1900,7 @@ async function harvestQuota() {
           await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
           await sleep(3000);
           if (!page.url().includes('login')) {
-            console.log('  [VIGILANCE] Session restored from cookies ?');
+            console.log('  [VIGILANCE] Session restored from cookies ✓');
             return;
           }
           await clearCookies();
@@ -2524,7 +1944,7 @@ async function harvestQuota() {
           if (!page.url().includes('login')) break;
         }
         if (page.url().includes('login')) throw new Error('Re-login failed after session death');
-        console.log('  [VIGILANCE] Fresh login successful ?');
+        console.log('  [VIGILANCE] Fresh login successful ✓');
         try {
           const nc = await page.cookies();
           const rel = nc.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
@@ -2532,11 +1952,11 @@ async function harvestQuota() {
         } catch(e) {}
       }
 
-      // ?? MAIN VIGILANCE LOOP (Dokki) ??
+      // ══ MAIN VIGILANCE LOOP (Dokki) ══
       while (true) {
         const elapsed = Date.now() - vigilanceStart;
         if (elapsed >= VIGILANCE_MAX_MS) {
-          console.log('\n[VIGILANCE] 5h 45m safety cap reached � stopping vigilance mode.');
+          console.log('\n[VIGILANCE] 5h 45m safety cap reached — stopping vigilance mode.');
           break;
         }
         console.log('\n[VIGILANCE] Waiting 13 minutes for next harvest...');
@@ -2544,9 +1964,9 @@ async function harvestQuota() {
 
         vigilanceRound++;
         const elapsedMin = Math.floor((Date.now() - vigilanceStart) / 60000);
-        console.log('\n' + '?'.repeat(50));
-        console.log('? VIGILANCE ROUND #' + vigilanceRound + ' � DOKKI (' + elapsedMin + 'min elapsed)');
-        console.log('?'.repeat(50));
+        console.log('\n' + '═'.repeat(50));
+        console.log('⚡ VIGILANCE ROUND #' + vigilanceRound + ' — DOKKI (' + elapsedMin + 'min elapsed)');
+        console.log('═'.repeat(50));
 
         try {
           // Refresh page + re-switch to 094 (returns confirmed vData directly)
@@ -2554,7 +1974,7 @@ async function harvestQuota() {
           console.log('  Remaining: ' + vData.remaining + ' GB | Used: ' + vData.used + ' GB | Balance: ' + vData.balance + ' EGP');
 
           await vigilanceFirestore(vData);
-          console.log('  ? Firestore + Ledger updated');
+          console.log('  ✓ Firestore + Ledger updated');
 
           try {
             const vNow = new Date().toISOString();
@@ -2567,13 +1987,13 @@ async function harvestQuota() {
             const alertMask = 'updateMask.fieldPaths=dokki_low&updateMask.fieldPaths=dokki_quota&updateMask.fieldPaths=dokki_updatedAt';
             const alertUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/alerts?key=${FIREBASE_API_KEY}&${alertMask}`;
             await fetch(alertUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: alertFields }) });
-          } catch(e) { console.log('  ? Flag update failed (non-critical):', e.message); }
+          } catch(e) { console.log('  ⚠ Flag update failed (non-critical):', e.message); }
 
           await vigilanceTelegram(vData, vigilanceRound, Date.now() - vigilanceStart);
           lastRemaining = vData.remaining;
 
           if (vData.remaining <= VIGILANCE_STOP_GB) {
-            console.log('\n?? [VIGILANCE] Quota reached ' + vData.remaining.toFixed(2) + ' GB � STOP THRESHOLD HIT.');
+            console.log('\n🚨 [VIGILANCE] Quota reached ' + vData.remaining.toFixed(2) + ' GB — STOP THRESHOLD HIT.');
             console.log('  Vigilance mode complete. Awaiting manual recharge.');
             break;
           }
@@ -2581,12 +2001,12 @@ async function harvestQuota() {
         } catch (vErr) {
           console.log('  [VIGILANCE] Round #' + vigilanceRound + ' error: ' + vErr.message);
           if (vErr.message.includes('SESSION_DIED') || vErr.message.includes('redirected to login') || vErr.message.includes('ALL METHODS FAILED')) {
-            console.log('  [VIGILANCE] Session dead � attempting restart...');
+            console.log('  [VIGILANCE] Session dead — attempting restart...');
             try {
               await vigilanceRestartSession();
               console.log('  [VIGILANCE] Session restarted. Will retry on next round.');
             } catch (restartErr) {
-              console.log('  [VIGILANCE] Restart failed: ' + restartErr.message + ' � stopping vigilance.');
+              console.log('  [VIGILANCE] Restart failed: ' + restartErr.message + ' — stopping vigilance.');
               break;
             }
           } else {
@@ -2599,7 +2019,7 @@ async function harvestQuota() {
     } // end vigilance mode
 
   } catch (error) {
-    console.error('\n? ERROR:', error.message);
+    console.error('\n❌ ERROR:', error.message);
     if (page) {
       try {
         const ss = await withTimeout(page.screenshot({ encoding: 'base64' }), 5000, 'screenshot');
@@ -2621,23 +2041,28 @@ async function harvestQuota() {
 async function main() {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      console.log(`\n${'?'.repeat(50)}\nATTEMPT ${attempt}/${MAX_RETRIES}\n${'?'.repeat(50)}\n`);
+      console.log(`\n${'═'.repeat(50)}\nATTEMPT ${attempt}/${MAX_RETRIES}\n${'═'.repeat(50)}\n`);
       await harvestQuota();
-      console.log('\n?? COMPLETE!');
+      console.log('\n🎉 COMPLETE!');
       process.exit(0);
     } catch (error) {
       console.error(`\nAttempt ${attempt} failed: ${error.message}`);
       if (error.message && error.message.includes('WE_BLOCKED')) {
-        console.error('? WE block detected � stopping all retries to avoid extending the block');
-        console.error('?? Will retry on next scheduled run automatically');
+        console.error('⛔ WE block detected — stopping all retries to avoid extending the block');
+        console.error('💀 Will retry on next scheduled run automatically');
         process.exit(1);
       }
       if (attempt < MAX_RETRIES) {
-        const d = randomDelay(30000, 45000);
-        console.log(`Retrying in ${Math.floor(d/1000)}s...`);
-        await sleep(d);
+        // FIX #4: Exponential backoff to avoid rate limiting
+        // Problem: Multiple rapid attempts trigger WE rate limiting
+        // Solution: Add 10s per attempt to base wait time
+        const baseWait = 38; // seconds
+        const backoff = attempt * 10; // 10s, 20s, 30s for attempts 1, 2, 3
+        const totalWait = (baseWait + backoff) * 1000; // convert to ms
+        console.log(`Retrying in ${baseWait + backoff}s (attempt ${attempt + 1}, backoff +${backoff}s)...`);
+        await sleep(totalWait);
       } else {
-        console.error('\n?? ALL ATTEMPTS FAILED');
+        console.error('\n💀 ALL ATTEMPTS FAILED');
         process.exit(1);
       }
     }
