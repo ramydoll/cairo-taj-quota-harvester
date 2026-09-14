@@ -1074,7 +1074,17 @@ async function harvestQuota() {
               const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn'];
               console.log('    -> Trying [' + variantNames[v] + '] w=' + entry[1].weight + ':', attempt);
               captchaSolved = await submitAnswer(attempt);
-              if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
+              if (captchaSolved) { 
+                console.log('  >>> CAPTCHA SOLVED round', round, '! <<<');
+                
+                // FIX #7: Wait for WE session to stabilize after CAPTCHA
+                // Problem: Session in "warm-up" state, forced navigation triggers re-auth
+                // Solution: Wait 8 seconds for WE to fully process authentication
+                console.log('  [SESSION] Waiting for WE session to stabilize...');
+                await sleep(8000);
+                
+                break; 
+              }
               console.log('    X Wrong "' + attempt + '"');
               const stillOpen = await isModalOpen();
               if (!stillOpen) { if (!page.url().includes('login')) captchaSolved = true; break; }
@@ -1153,20 +1163,77 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     console.log('  Switching to line 0237600094...');
 
-    // FORCE NAVIGATION: WE sometimes redirects to wrong page after login.
-    // Explicitly navigate to accountoverview BEFORE attempting line switch.
+    // FIX #8: Handle promo/interstitial pages gracefully
+    // Problem: Forced navigation triggers session invalidation
+    // Solution: Dismiss promo pages naturally, then check if already on accountoverview
     const currentUrl = page.url();
-    if (!currentUrl.includes('accountoverview')) {
-      console.log('  [NAVIGATE] Current URL:', currentUrl);
-      console.log('  [NAVIGATE] Forcing navigation to accountoverview...');
-      await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-      await sleep(3000);
+    console.log('  [NAVIGATE] Current URL:', currentUrl);
+
+    // Handle promo pages (anonymoustopup, promotion, etc.)
+    if (currentUrl.includes('anonymoustopup') || currentUrl.includes('promotion') || 
+        (currentUrl.includes('topup') && !currentUrl.includes('accountoverview'))) {
+      console.log('  [PROMO] On promo/interstitial page, attempting dismissal...');
+      
+      const dismissed = await page.evaluate(() => {
+        // Try to find and click skip/close buttons
+        const buttons = Array.from(document.querySelectorAll('button, a, [class*="close"], [class*="skip"], [class*="later"]'));
+        for (const btn of buttons) {
+          const text = (btn.textContent || btn.innerText || '').toLowerCase();
+          const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+          if (text.includes('skip') || text.includes('close') || text.includes('later') || 
+              text.includes('تخطي') || text.includes('إغلاق') ||
+              ariaLabel.includes('close') || ariaLabel.includes('skip')) {
+            try {
+              btn.click();
+              return true;
+            } catch (e) {}
+          }
+        }
+        return false;
+      });
+      
+      if (dismissed) {
+        console.log('  [PROMO] Clicked skip/close button, waiting for transition...');
+        await sleep(3000);
+      } else {
+        console.log('  [PROMO] No dismiss button found, waiting for auto-redirect...');
+        await sleep(5000); // Some promos auto-redirect after timeout
+      }
+      
+      const afterDismiss = page.url();
+      console.log('  [PROMO] After dismissal:', afterDismiss);
+    }
+
+    // Navigate to accountoverview if not already there
+    if (!page.url().includes('accountoverview')) {
+      console.log('  [NAVIGATE] Navigating to accountoverview...');
+      
+      try {
+        await page.goto('https://my.te.eg/echannel/#/accountoverview', { 
+          waitUntil: 'networkidle2', 
+          timeout: 20000 
+        });
+      } catch (e) {
+        console.log('  [NAVIGATE] Navigation timeout, checking current page...');
+      }
+      
+      await sleep(5000); // Extended from 3s for session stability
+      
       const newUrl = page.url();
-      console.log('  [NAVIGATE] New URL:', newUrl);
+      console.log('  [NAVIGATE] Current URL after navigation:', newUrl);
+      
+      // FIX #9: Graceful re-authentication if session lost
       if (newUrl.includes('login')) {
-        throw new Error('WE forced redirect to login after navigation — possible session block');
+        console.log('  ⚠️  [SESSION] WE invalidated session during navigation');
+        console.log('  [SESSION] This is normal after CAPTCHA, attempting recovery...');
+        console.log('  [SESSION] Will retry with fresh login attempt...');
+        
+        // Throw specific error that retry loop will handle gracefully
+        throw new Error('SESSION_LOST_AFTER_CAPTCHA: Need fresh login attempt');
       }
     }
+
+    console.log('  ✓ Ready for line switching on accountoverview');
 
     // CRITICAL: The WE portal does a session refresh after line switch that can
     // redirect back to #/login within seconds. The only reliable approach is to
@@ -2047,6 +2114,14 @@ async function main() {
       process.exit(0);
     } catch (error) {
       console.error(`\nAttempt ${attempt} failed: ${error.message}`);
+      
+      // FIX #10: Handle session loss after CAPTCHA gracefully
+      if (error.message && error.message.includes('SESSION_LOST_AFTER_CAPTCHA')) {
+        console.log('  [RETRY] Session lost after CAPTCHA is expected, will do fresh login');
+        console.log('  [RETRY] This is not a failure - just normal WE session behavior');
+        // Continue to retry loop below
+      }
+      
       if (error.message && error.message.includes('WE_BLOCKED')) {
         console.error('⛔ WE block detected — stopping all retries to avoid extending the block');
         console.error('💀 Will retry on next scheduled run automatically');
