@@ -893,27 +893,8 @@ async function harvestQuota() {
     // ======================================
     console.log('  Waiting for login result...');
     
-    // IMMEDIATE CHECK: See if form validation error appeared
-    // Skip generic UI text like "Internet", "Select Type", etc.
+    // Wait for page to settle after all submit methods
     await sleep(2000);
-    const formError = await page.evaluate(() => {
-      const errorEls = Array.from(document.querySelectorAll('.ant-form-item-explain-error, .ant-message-error, [class*="error"][class*="message"]'));
-      for (const el of errorEls) {
-        const txt = el.innerText?.trim();
-        // Skip if it's just a single word (likely UI label, not error)
-        if (txt && txt.length > 10 && txt.length < 200 && txt.split(' ').length > 1) {
-          // Also skip if it contains common non-error words
-          if (!/internet|select|type|dropdown|username|password/i.test(txt)) {
-            return txt;
-          }
-        }
-      }
-      return null;
-    });
-    if (formError) {
-      console.log('  [FORM ERROR] Validation failed:', formError);
-      throw new Error('Form validation error: ' + formError);
-    }
 
     // ======================================
     // ULTIMATE NAVIGATION DETECTION v3
@@ -1505,8 +1486,7 @@ async function harvestQuota() {
           const isInterstitial = url.includes('anonymoustopup') || 
                                  url.includes('promotion') ||
                                  url.includes('offer') ||
-                                 url.includes('topup') ||
-                                 (url.includes('echannel') && !url.includes('login') && !hasDashboard);
+                                 (url.includes('topup') && !url.includes('accountoverview'));
           
           return { hasLoginForm, hasDashboard, isInterstitial, url };
         });
@@ -1515,14 +1495,14 @@ async function harvestQuota() {
         if (pageCheck.isInterstitial && !interstitialPageDetected) {
           interstitialPageDetected = true;
           const waitTime = (tick * 0.1).toFixed(1);
-          console.log(`  ??  Interstitial page detected after ${waitTime}s: ${pageCheck.url}`);
-          console.log('  -> Navigating to accountoverview...');
+          console.log(`  ⚠️  Interstitial page detected after ${waitTime}s: ${pageCheck.url}`);
+          console.log('  → Navigating to accountoverview...');
           
           // Force navigate directly to accountoverview (correct dashboard URL)
           await page.evaluate(() => {
             window.location.hash = '#/accountoverview';
           }).catch(() => {});
-          await sleep(3000);
+          await sleep(4000); // Give more time for dashboard to load
           continue;
         }
         
@@ -1530,14 +1510,14 @@ async function harvestQuota() {
         if (pageCheck.hasDashboard && !pageCheck.hasLoginForm) {
           dashboardReached = true;
           const waitTime = (tick * 0.1).toFixed(1);
-          console.log(`  ? Dashboard reached after ${waitTime}s`);
+          console.log(`  ✓ Dashboard reached after ${waitTime}s`);
           break;
         }
         
-        // Failure: Redirected back to login
-        if (pageCheck.hasLoginForm && !pageCheck.hasDashboard) {
+        // Failure: Redirected back to login - don't throw, let outer retry handle it
+        if (pageCheck.hasLoginForm && !pageCheck.hasDashboard && tick > 10) {
           const waitTime = (tick * 0.1).toFixed(1);
-          console.log(`  ? Redirected to login after ${waitTime}s - CAPTCHA solve didn't authenticate`);
+          console.log(`  ✗ Redirected to login after ${waitTime}s - CAPTCHA answer was wrong, retrying...`);
           throw new Error('Post-CAPTCHA redirect to login - authentication failed');
         }
         
