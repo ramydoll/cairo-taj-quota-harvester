@@ -11,7 +11,7 @@ const WE_PASSWORD = process.env.DOKKI_PASSWORD;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_GROUP_ID = process.env.TELEGRAM_GROUP_ID; // Group chat for colleague
-const MAX_RETRIES = 5; // Increased from 3 for better resilience (FIX #6)
+const MAX_RETRIES = 3;
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -560,24 +560,6 @@ async function harvestQuota() {
     // ======================================
     console.log('  Waiting for login result...');
     
-    // FIX #5: Check for rate limiting early
-    // Problem: Script doesn't detect when WE is actively blocking
-    // Solution: Check for rate limit messages before continuing
-    await sleep(1000);
-    const isBlocked = await page.evaluate(() => {
-      const text = document.body.innerText.toLowerCase();
-      return text.includes('too many') || 
-             text.includes('rate limit') ||
-             text.includes('temporarily blocked') ||
-             text.includes('try again later') ||
-             text.includes('تم حظر'); // Arabic for "blocked"
-    });
-    
-    if (isBlocked) {
-      console.log('⚠️  WE server is rate limiting - stopping to avoid ban');
-      throw new Error('Rate limited by WE server');
-    }
-    
     // IMMEDIATE CHECK: See if form validation error appeared
     // Skip generic UI text like "Internet", "Select Type", etc.
     await sleep(2000);
@@ -646,30 +628,6 @@ async function harvestQuota() {
     // CAPTCHA ENGINE v4 (only if captcha was detected)
     // ======================================
     if (postLoginState === 'captcha') {
-      console.log('  [CAPTCHA] Detection triggered, waiting for modal to render...');
-      
-      // FIX #1: Wait for modal to actually render in DOM before starting OCR
-      // Problem: CAPTCHA detected at tick 0, but modal takes 1-2s to render
-      // Solution: Poll for modal visibility for up to 3 seconds
-      let modalReady = false;
-      for (let w = 0; w < 30; w++) {
-        await sleep(100);
-        const isOpen = await page.evaluate(() => {
-          const modal = document.querySelector('.ant-modal-root .ant-modal-wrap');
-          const img = document.querySelector('img[src*="Captcha"]');
-          return modal && img && (!modal.style || modal.style.display !== 'none');
-        });
-        if (isOpen) {
-          modalReady = true;
-          console.log(`  [MODAL] Rendered after ${w * 100}ms`);
-          break;
-        }
-      }
-      
-      if (!modalReady) {
-        console.log('  [MODAL] Warning: Not visible after 3s, proceeding anyway...');
-      }
-      
       console.log('  [CAPTCHA] Ultimate Engine v5 starting...\n');
 
       // HELPER: Find the captcha image (largest img inside modal)
@@ -926,24 +884,8 @@ async function harvestQuota() {
             const result = await doFullReLogin();
             console.log('    [RETRIGGER] Result:', result);
             if (result === 'navigated') { captchaSolved = true; break; }
-            if (result === 'modal')     { 
-              // FIX #2: Wait for modal to actually render after retrigger
-              // Problem: Modal check happens too fast after re-login
-              // Solution: Poll for up to 5 seconds before considering it missing
-              console.log('    [RETRIGGER] Waiting for modal to render...');
-              let retriggerModalReady = false;
-              for (let w = 0; w < 50; w++) {
-                await sleep(100);
-                const isOpen = await isModalOpen();
-                if (isOpen) {
-                  retriggerModalReady = true;
-                  console.log(`    [RETRIGGER] Modal appeared after ${w * 100}ms`);
-                  break;
-                }
-              }
-              modalReady = retriggerModalReady;
-            }
-            if (!modalReady) { console.log('    ! No modal after full re-login (waited 5s), skipping round'); continue; }
+            if (result === 'modal')     { modalReady = true; }
+            if (!modalReady) { console.log('    ! No modal after full re-login, skipping round'); continue; }
           }
           await sleep(1500);
         }
@@ -1074,17 +1016,7 @@ async function harvestQuota() {
               const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn'];
               console.log('    -> Trying [' + variantNames[v] + '] w=' + entry[1].weight + ':', attempt);
               captchaSolved = await submitAnswer(attempt);
-              if (captchaSolved) { 
-                console.log('  >>> CAPTCHA SOLVED round', round, '! <<<');
-                
-                // FIX #7: Wait for WE session to stabilize after CAPTCHA
-                // Problem: Session in "warm-up" state, forced navigation triggers re-auth
-                // Solution: Wait 8 seconds for WE to fully process authentication
-                console.log('  [SESSION] Waiting for WE session to stabilize...');
-                await sleep(8000);
-                
-                break; 
-              }
+              if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
               console.log('    X Wrong "' + attempt + '"');
               const stillOpen = await isModalOpen();
               if (!stillOpen) { if (!page.url().includes('login')) captchaSolved = true; break; }
@@ -1163,77 +1095,20 @@ async function harvestQuota() {
     // ══════════════════════════════════════
     console.log('  Switching to line 0237600094...');
 
-    // FIX #8: Handle promo/interstitial pages gracefully
-    // Problem: Forced navigation triggers session invalidation
-    // Solution: Dismiss promo pages naturally, then check if already on accountoverview
+    // FORCE NAVIGATION: WE sometimes redirects to wrong page after login.
+    // Explicitly navigate to accountoverview BEFORE attempting line switch.
     const currentUrl = page.url();
-    console.log('  [NAVIGATE] Current URL:', currentUrl);
-
-    // Handle promo pages (anonymoustopup, promotion, etc.)
-    if (currentUrl.includes('anonymoustopup') || currentUrl.includes('promotion') || 
-        (currentUrl.includes('topup') && !currentUrl.includes('accountoverview'))) {
-      console.log('  [PROMO] On promo/interstitial page, attempting dismissal...');
-      
-      const dismissed = await page.evaluate(() => {
-        // Try to find and click skip/close buttons
-        const buttons = Array.from(document.querySelectorAll('button, a, [class*="close"], [class*="skip"], [class*="later"]'));
-        for (const btn of buttons) {
-          const text = (btn.textContent || btn.innerText || '').toLowerCase();
-          const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-          if (text.includes('skip') || text.includes('close') || text.includes('later') || 
-              text.includes('تخطي') || text.includes('إغلاق') ||
-              ariaLabel.includes('close') || ariaLabel.includes('skip')) {
-            try {
-              btn.click();
-              return true;
-            } catch (e) {}
-          }
-        }
-        return false;
-      });
-      
-      if (dismissed) {
-        console.log('  [PROMO] Clicked skip/close button, waiting for transition...');
-        await sleep(3000);
-      } else {
-        console.log('  [PROMO] No dismiss button found, waiting for auto-redirect...');
-        await sleep(5000); // Some promos auto-redirect after timeout
-      }
-      
-      const afterDismiss = page.url();
-      console.log('  [PROMO] After dismissal:', afterDismiss);
-    }
-
-    // Navigate to accountoverview if not already there
-    if (!page.url().includes('accountoverview')) {
-      console.log('  [NAVIGATE] Navigating to accountoverview...');
-      
-      try {
-        await page.goto('https://my.te.eg/echannel/#/accountoverview', { 
-          waitUntil: 'networkidle2', 
-          timeout: 20000 
-        });
-      } catch (e) {
-        console.log('  [NAVIGATE] Navigation timeout, checking current page...');
-      }
-      
-      await sleep(5000); // Extended from 3s for session stability
-      
+    if (!currentUrl.includes('accountoverview')) {
+      console.log('  [NAVIGATE] Current URL:', currentUrl);
+      console.log('  [NAVIGATE] Forcing navigation to accountoverview...');
+      await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+      await sleep(3000);
       const newUrl = page.url();
-      console.log('  [NAVIGATE] Current URL after navigation:', newUrl);
-      
-      // FIX #9: Graceful re-authentication if session lost
+      console.log('  [NAVIGATE] New URL:', newUrl);
       if (newUrl.includes('login')) {
-        console.log('  ⚠️  [SESSION] WE invalidated session during navigation');
-        console.log('  [SESSION] This is normal after CAPTCHA, attempting recovery...');
-        console.log('  [SESSION] Will retry with fresh login attempt...');
-        
-        // Throw specific error that retry loop will handle gracefully
-        throw new Error('SESSION_LOST_AFTER_CAPTCHA: Need fresh login attempt');
+        throw new Error('WE forced redirect to login after navigation — possible session block');
       }
     }
-
-    console.log('  ✓ Ready for line switching on accountoverview');
 
     // CRITICAL: The WE portal does a session refresh after line switch that can
     // redirect back to #/login within seconds. The only reliable approach is to
@@ -2114,28 +1989,15 @@ async function main() {
       process.exit(0);
     } catch (error) {
       console.error(`\nAttempt ${attempt} failed: ${error.message}`);
-      
-      // FIX #10: Handle session loss after CAPTCHA gracefully
-      if (error.message && error.message.includes('SESSION_LOST_AFTER_CAPTCHA')) {
-        console.log('  [RETRY] Session lost after CAPTCHA is expected, will do fresh login');
-        console.log('  [RETRY] This is not a failure - just normal WE session behavior');
-        // Continue to retry loop below
-      }
-      
       if (error.message && error.message.includes('WE_BLOCKED')) {
         console.error('⛔ WE block detected — stopping all retries to avoid extending the block');
         console.error('💀 Will retry on next scheduled run automatically');
         process.exit(1);
       }
       if (attempt < MAX_RETRIES) {
-        // FIX #4: Exponential backoff to avoid rate limiting
-        // Problem: Multiple rapid attempts trigger WE rate limiting
-        // Solution: Add 10s per attempt to base wait time
-        const baseWait = 38; // seconds
-        const backoff = attempt * 10; // 10s, 20s, 30s for attempts 1, 2, 3
-        const totalWait = (baseWait + backoff) * 1000; // convert to ms
-        console.log(`Retrying in ${baseWait + backoff}s (attempt ${attempt + 1}, backoff +${backoff}s)...`);
-        await sleep(totalWait);
+        const d = randomDelay(30000, 45000);
+        console.log(`Retrying in ${Math.floor(d/1000)}s...`);
+        await sleep(d);
       } else {
         console.error('\n💀 ALL ATTEMPTS FAILED');
         process.exit(1);
