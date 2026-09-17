@@ -1050,6 +1050,17 @@ async function harvestQuota() {
     // CAPTCHA ENGINE v4 (only if captcha was detected)
     // ======================================
     if (postLoginState === 'captcha') {
+      // ═══════════════════════════════════════════════════════════════════════
+      // ULTIMATE FIX #3: MODAL ANIMATION WAIT
+      // ═══════════════════════════════════════════════════════════════════════
+      // CRITICAL: Modal detected but image may not be loaded yet.
+      // CSS animations + lazy-loading can delay image rendering.
+      // Wait 3 seconds for modal to fully render before attempting OCR.
+      console.log('  [CAPTCHA] Modal detected, waiting for animation/rendering...');
+      await sleep(3000);
+      console.log('  [CAPTCHA] Modal should be fully rendered now');
+      // ═══════════════════════════════════════════════════════════════════════
+      
       console.log('  [CAPTCHA] Ultimate Engine v5 starting...\n');
 
       // HELPER: Find the captcha image (largest img inside modal)
