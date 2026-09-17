@@ -1,13 +1,12 @@
 ﻿name: Cloud Quota Harvester - Dokki
 
 on:
-  # BACKUP TRIGGER: GitHub Actions cron (every 3 hours)
-  # Runs at: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC
-  schedule:
-    - cron: '0 */3 * * *'
+  # GitHub Actions cron DISABLED - using external webhook only
+  # (uncomment lines below if webhook service fails)
+  # schedule:
+  #   - cron: '0 */3 * * *'
   
-  # PRIMARY TRIGGER: External webhook (every 2 hours)
-  # Runs at: 00:00, 02:00, 04:00, 06:00, 08:00, 10:00, 12:00, 14:00, 16:00, 18:00, 20:00, 22:00 UTC
+  # PRIMARY TRIGGER: External webhook (100% reliable timing)
   repository_dispatch:
     types: [harvest_dokki]
   
