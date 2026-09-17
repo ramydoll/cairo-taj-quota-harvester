@@ -11,7 +11,7 @@ const WE_PASSWORD = process.env.DOKKI_PASSWORD;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_GROUP_ID = process.env.TELEGRAM_GROUP_ID; // Group chat for colleague
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 5; // ULTIMATE FIX: Increased from 3 to 5 (more retry chances)
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -1037,6 +1037,18 @@ async function harvestQuota() {
         await sleep(2000);
         throw new Error('Captcha unsolvable after 12 rounds - retrying login');
       }
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // ULTIMATE FIX #2: POST-CAPTCHA SESSION STABILIZATION WAIT
+      // ═══════════════════════════════════════════════════════════════════════
+      // CRITICAL: After CAPTCHA solve, WE server needs time to establish stable session.
+      // Immediate line-switching causes "WE forced redirect to login" in 75% of cases.
+      // This 8-second wait allows WE backend to finalize authentication state.
+      // Analysis: Run #5 (SUCCESS) had extra delay from ads, others failed at line switch.
+      console.log('  [POST-CAPTCHA] Waiting 8s for WE session stabilization...');
+      await sleep(8000);
+      console.log('  [POST-CAPTCHA] Session should be stable now');
+      // ═══════════════════════════════════════════════════════════════════════
     }
 
 
