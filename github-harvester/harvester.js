@@ -620,7 +620,9 @@ async function harvestQuota() {
       const serviceNum = document.querySelector('#login_loginid_input_01')?.value;
       const dropdown = document.querySelector('.ant-select-selection-item')?.textContent?.trim();
       const password = document.querySelector('#login_password_input_01')?.value;
-      const loginBtn = Array.from(document.querySelectorAll('button')).find(b => 
+      // FIX #4: Search in form only
+      const formContainer = document.querySelector('form') || document.body;
+      const loginBtn = Array.from(formContainer.querySelectorAll('button')).find(b => 
         b.textContent.toLowerCase().includes('login')
       );
       
@@ -661,7 +663,9 @@ async function harvestQuota() {
     let buttonEnabled = false;
     for (let i = 0; i < 8; i++) {
       const btnState = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
+        // FIX #4: Search in form only
+        const formContainer = document.querySelector('form') || document.body;
+        const btns = Array.from(formContainer.querySelectorAll('button'));
         const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
         return loginBtn ? { disabled: loginBtn.disabled, text: loginBtn.textContent.trim(), className: loginBtn.className } : null;
       });
@@ -679,7 +683,9 @@ async function harvestQuota() {
     if (!buttonEnabled) {
       console.log('  [FORCE] Button still disabled, forcing enable...');
       await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
+        // FIX #4: Search in form only
+        const formContainer = document.querySelector('form') || document.body;
+        const btns = Array.from(formContainer.querySelectorAll('button'));
         const loginBtn = btns.find(b => b.textContent.toLowerCase().includes('login'));
         if (loginBtn) {
           loginBtn.disabled = false;
@@ -739,7 +745,9 @@ async function harvestQuota() {
       
       // Get fresh button handle
       const btnHandle = await page.evaluateHandle(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
+        // FIX #4: Search in form only
+        const formContainer = document.querySelector('form') || document.body;
+        const btns = Array.from(formContainer.querySelectorAll('button'));
         return btns.find(b => b.textContent.toLowerCase().includes('login') && !b.disabled);
       });
       
@@ -1244,7 +1252,9 @@ async function harvestQuota() {
           await sleep(randomDelay(2000, 3000));
           // Submit
           await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
+            // FIX #4: Search in form only
+        const formContainer = document.querySelector('form') || document.body;
+        const btns = Array.from(formContainer.querySelectorAll('button'));
             const btn = btns.find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
             if (btn) btn.click();
           });
@@ -2251,7 +2261,9 @@ async function harvestQuota() {
         await sleep(randomDelay(4000, 6000));
         // Submit
         await page.evaluate(() => {
-          const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
+          // FIX #4: Search only in form container
+          const formContainer = document.querySelector('form') || document.body;
+          const btn = Array.from(formContainer.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
           if (btn) btn.click();
         });
         // Wait for navigation
