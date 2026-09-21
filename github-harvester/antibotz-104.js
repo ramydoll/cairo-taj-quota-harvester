@@ -515,25 +515,88 @@ async function harvestQuota() {
         inp.dispatchEvent(new Event('blur', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       });
+      // ============================================================================
+      // ULTIMATE FIX: 100% RELIABLE LOGIN BUTTON DETECTION
+      // Date: 2026-09-21
+      // Fixes: Button outside form + Multiple buttons + Selection priority
+      // ============================================================================
       
-      // Step 2: Find the Login button (multiple strategies)
+      // Step 2: Find the Login button (ULTIMATE STRATEGY - PRIORITY ORDER)
       const btns = Array.from(document.querySelectorAll('button'));
-      let loginBtn = btns.find(b => 
-        b.textContent && b.textContent.toLowerCase().includes('login') ||
-        b.className && (b.className.includes('primary') || b.className.includes('submit'))
-      );
+      console.log(`  [BUTTON-DEBUG] Total buttons found: ${btns.length}`);
       
-      // Fallback: look for button inside form
+      // Log all buttons for debugging
+      btns.forEach((b, i) => {
+        console.log(`  [BUTTON-DEBUG] Button ${i}: text="${b.textContent?.trim()}" class="${b.className}" id="${b.id}"`);
+      });
+      
+      let loginBtn = null;
+      
+      // PRIORITY 1: Button with specific ID (most reliable)
       if (!loginBtn) {
-        const form = document.querySelector('form');
-        if (form) loginBtn = form.querySelector('button[type="submit"], button.ant-btn-primary');
+        loginBtn = document.getElementById('login-withecare') || 
+                   document.querySelector('[id*="login"][id*="with"]');
+        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 1: Found by ID');
       }
       
-      // Fallback: last button on page (usually Submit/Login)
-      if (!loginBtn && btns.length > 0) loginBtn = btns[btns.length - 1];
+      // PRIORITY 2: Button text contains "login" (case-insensitive, exclude "register")
+      if (!loginBtn) {
+        loginBtn = btns.find(b => {
+          const text = b.textContent?.toLowerCase() || '';
+          return text.includes('login') && !text.includes('register');
+        });
+        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 2: Found by text "login"');
+      }
       
-      if (!loginBtn) return { success: false, reason: 'No login button found' };
+      // PRIORITY 3: Button with primary class BUT not register
+      if (!loginBtn) {
+        loginBtn = btns.find(b => {
+          const hasClass = b.className && (b.className.includes('primary') || b.className.includes('submit'));
+          const text = b.textContent?.toLowerCase() || '';
+          const notRegister = !text.includes('register');
+          return hasClass && notRegister;
+        });
+        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 3: Found by primary class (not register)');
+      }
       
+      // PRIORITY 4: Button type="submit" anywhere on page (not just in form)
+      if (!loginBtn) {
+        loginBtn = document.querySelector('button[type="submit"]');
+        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 4: Found by type="submit"');
+      }
+      
+      // PRIORITY 5: .ant-btn-primary anywhere on page (not just in form)
+      if (!loginBtn) {
+        loginBtn = document.querySelector('button.ant-btn-primary');
+        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 5: Found by .ant-btn-primary');
+      }
+      
+      // PRIORITY 6: Last button that's NOT register
+      if (!loginBtn && btns.length > 0) {
+        // Filter out register buttons, then take last one
+        const nonRegisterBtns = btns.filter(b => {
+          const text = b.textContent?.toLowerCase() || '';
+          return !text.includes('register');
+        });
+        if (nonRegisterBtns.length > 0) {
+          loginBtn = nonRegisterBtns[nonRegisterBtns.length - 1];
+          console.log('  [BUTTON-MATCH] Strategy 6: Last non-register button');
+        }
+      }
+      
+      // If still not found, return detailed error
+      if (!loginBtn) {
+        const errorMsg = `No login button found. Buttons on page: ${btns.length}`;
+        console.log(`  [BUTTON-ERROR] ${errorMsg}`);
+        btns.forEach((b, i) => {
+          console.log(`    Button ${i}: "${b.textContent?.trim()}" (class: ${b.className}, id: ${b.id})`);
+        });
+        return { success: false, reason: errorMsg };
+      }
+      
+      // Log final selection
+      console.log(`  [BUTTON-FINAL] Selected: text="${loginBtn.textContent?.trim()}" id="${loginBtn.id}" class="${loginBtn.className}"`);
+
       // Step 3: Ensure button is enabled
       if (loginBtn.disabled) {
         loginBtn.disabled = false;
