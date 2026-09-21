@@ -824,7 +824,28 @@ async function harvestQuota() {
           await page.keyboard.press('Enter');
         }
         await sleep(5000);
-        return !page.url().includes('login');
+
+        // Check multiple indicators of success:
+        // 1. Modal closed (captcha was correct)
+        // 2. URL changed away from login (logged in successfully)
+        // 3. No error message visible
+        const success = await page.evaluate(() => {
+          // Check 1: Is captcha modal still visible?
+          const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"][class*="verification"]');
+          const modalVisible = modal && modal.offsetParent !== null;
+          
+          // Check 2: Is there a visible error message?
+          const errorMsg = document.querySelector('.ant-message-error, [class*="error"]');
+          const hasError = errorMsg && errorMsg.offsetParent !== null;
+          
+          // Check 3: Current URL
+          const url = window.location.href;
+          
+          // Success = modal closed AND no error AND not on login page
+          return !modalVisible && !hasError && !url.includes('login');
+        }).catch(() => false);
+
+        return success;
       }
 
       // HELPER: Check if modal is still open
