@@ -933,8 +933,8 @@ async function harvestQuota() {
 
       let captchaSolved = false;
 
-      for (let round = 1; round <= 12 && !captchaSolved; round++) {
-        console.log('  -- Round', round, '/ 12 --');
+      for (let round = 1; round <= 5 && !captchaSolved; round++) {
+        console.log('  -- Round', round, '/ 5 --');
 
         // -- Round > 1: wait for modal, retrigger if missing -------------------
         if (round > 1) {
@@ -1139,7 +1139,7 @@ async function harvestQuota() {
           if (btn) btn.click();
         });
         await sleep(2000);
-        throw new Error('Captcha unsolvable after 12 rounds - retrying login');
+        throw new Error('Captcha unsolvable after 5 rounds - retrying login');
       }
     }
 
