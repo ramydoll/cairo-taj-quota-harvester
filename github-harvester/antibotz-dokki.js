@@ -502,6 +502,49 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
+    // ══════════════════════════════════════════════════════════════════════════════
+    // PRE-SUBMIT VALIDATION - Verify form is ready before clicking submit
+    // ══════════════════════════════════════════════════════════════════════════════
+    console.log('  [PRE-CHECK] Validating form state before submit...');
+    const formState = await page.evaluate(() => {
+      const username = document.querySelector('#login_loginid_input_01')?.value;
+      const password = document.querySelector('#login_password_input_01')?.value;
+      const dropdownText = document.querySelector('.ant-select-selection-item')?.textContent?.trim();
+      
+      // Check for validation errors
+      const errors = Array.from(document.querySelectorAll('.ant-form-item-explain-error'));
+      const errorTexts = errors.map(e => e.textContent?.trim()).filter(Boolean);
+      
+      return {
+        username: username || '',
+        usernameOk: !!username && username.length > 5,
+        password: password || '',
+        passwordOk: !!password && password.length > 3,
+        dropdown: dropdownText || '',
+        dropdownOk: dropdownText && dropdownText.toLowerCase().includes('internet'),
+        errors: errorTexts,
+        hasErrors: errorTexts.length > 0
+      };
+    });
+
+    console.log('  [PRE-CHECK] State:', {
+      user: formState.usernameOk ? '✓' : '✗',
+      pass: formState.passwordOk ? '✓' : '✗', 
+      drop: formState.dropdownOk ? '✓' : '✗',
+      errors: formState.errors.length
+    });
+
+    if (!formState.usernameOk || !formState.passwordOk || !formState.dropdownOk || formState.hasErrors) {
+      const reason = [];
+      if (!formState.usernameOk) reason.push(`username=${formState.username}`);
+      if (!formState.passwordOk) reason.push(`password empty`);
+      if (!formState.dropdownOk) reason.push(`dropdown="${formState.dropdown}"`);
+      if (formState.hasErrors) reason.push(`errors: ${formState.errors.join(', ')}`);
+      throw new Error(`Form not ready to submit: ${reason.join(', ')}`);
+    }
+
+    console.log('  [PRE-CHECK] ✓ Form ready to submit\n');
+    
     // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
     await sleep(1000);
     const submitSuccess = await page.evaluate(() => {
@@ -511,6 +554,16 @@ async function harvestQuota() {
         inp.dispatchEvent(new Event('blur', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       });
+      
+      // Force complete form validation cycle
+      // Let React/Ant Design process events
+      
+      // Trigger form submit event explicitly
+      const form = document.querySelector('form');
+      if (form) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: false }));
+      }
+      
       // ============================================================================
       // ULTIMATE FIX: 100% RELIABLE LOGIN BUTTON DETECTION
       // Date: 2026-09-21
@@ -646,7 +699,7 @@ async function harvestQuota() {
     }
 
     let postLoginState = 'unknown';
-    for (let tick = 0; tick < 20; tick++) {
+    for (let tick = 0; tick < 30; tick++) {  // Extended from 20s to 30s
       const currentUrl = page.url();
       if (!currentUrl.includes('login')) {
         postLoginState = 'navigated';
@@ -684,7 +737,7 @@ async function harvestQuota() {
     }
 
     if (postLoginState === 'unknown') {
-      throw new Error('Still on login page - no navigation or captcha after 20s');
+      throw new Error('Still on login page - no navigation or captcha after 30s');
     }
 
     // ======================================
@@ -829,7 +882,40 @@ async function harvestQuota() {
           await page.keyboard.press('Enter');
         }
         await sleep(5000);
-        return !page.url().includes('login');
+
+        // Extended wait for WE to fully process the answer
+        await sleep(3000); // Total 8 seconds
+
+        // Comprehensive multi-indicator validation
+        const success = await page.evaluate(() => {
+          // Check 1: Captcha modal must be completely gone
+          const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"][class*="verification"]');
+          const modalVisible = modal && modal.offsetParent !== null;
+          
+          // Check 2: No error messages anywhere
+          const errorMsg = document.querySelector('.ant-message-error, [class*="error"]');
+          const hasError = errorMsg && errorMsg.offsetParent !== null;
+          
+          // Check 3: URL must have changed to account page
+          const url = window.location.href;
+          const urlOk = url.includes('accountoverview') || url.includes('anonymoustopup');
+          
+          // Check 4: Login form must be GONE (most reliable indicator)
+          const loginForm = document.querySelector('#login_loginid_input_01');
+          const formGone = !loginForm || loginForm.offsetParent === null;
+          
+          console.log('[CAPTCHA-CHECK]', {
+            modalClosed: !modalVisible,
+            noError: !hasError,
+            urlChanged: urlOk,
+            formGone: formGone
+          });
+          
+          // ALL four must be true
+          return !modalVisible && !hasError && urlOk && formGone;
+        }).catch(() => false);
+
+        return success;
       }
 
       // HELPER: Check if modal is still open
@@ -930,8 +1016,8 @@ async function harvestQuota() {
 
       let captchaSolved = false;
 
-      for (let round = 1; round <= 12 && !captchaSolved; round++) {
-        console.log('  -- Round', round, '/ 12 --');
+      for (let round = 1; round <= 5 && !captchaSolved; round++) {
+        console.log('  -- Round', round, '/ 5 --');
 
         // -- Round > 1: wait for modal, retrigger if missing -------------------
         if (round > 1) {
@@ -988,17 +1074,30 @@ async function harvestQuota() {
 
             // -- Wait for valid captcha image (up to 30s) -----------------------
             imgHandle = null;
-            for (let retry = 0; retry < 30; retry++) {
+            for (let retry = 0; retry < 8; retry++) {  // Reduced from 30 to 8
               imgHandle = await findCaptchaImg();
               const isValid = await page.evaluate(function(el) {
                 if (!el) return false;
-                if (el.naturalWidth > 0) return true;
-                var r = el.getBoundingClientRect();
-                return r.width > 80 && r.height > 25;
+                
+                // PRIORITY 1: Check rendered dimensions FIRST (works for data URIs immediately)
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 80 && rect.height > 25) {
+                  console.log('[IMG-VALID] Dimensions:', rect.width, 'x', rect.height);
+                  return true;
+                }
+                
+                // PRIORITY 2: Fallback to naturalWidth (for remote images)
+                if (el.naturalWidth > 0 && el.naturalHeight > 0) {
+                  console.log('[IMG-VALID] Natural:', el.naturalWidth, 'x', el.naturalHeight);
+                  return true;
+                }
+                
+                console.log('[IMG-INVALID] rect:', rect.width, 'x', rect.height, 'natural:', el.naturalWidth, 'x', el.naturalHeight);
+                return false;
               }, imgHandle).catch(() => false);
               if (isValid) break;
               imgHandle = null;
-              await sleep(1000);
+              await sleep(500);  // Reduced from 1000ms to 500ms
             }
             if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); break; }
 
@@ -1098,7 +1197,7 @@ async function harvestQuota() {
           if (btn) btn.click();
         });
         await sleep(2000);
-        throw new Error('Captcha unsolvable after 12 rounds - retrying login');
+        throw new Error('Captcha unsolvable after 5 rounds - retrying login');
       }
     }
 
@@ -1107,6 +1206,40 @@ async function harvestQuota() {
     console.log('STEP 2: SERVICE NUMBER (USERNAME)');
     // ══════════════════════════════════════
     console.log('  ✓ Login successful!\n');
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // SESSION VALIDATION - Verify session is truly valid before proceeding
+    // ══════════════════════════════════════════════════════════════════════════════
+    console.log('  [SESSION-CHECK] Validating login session...');
+    await sleep(3000); // Let session stabilize
+
+    // Test 1: Verify current URL is valid
+    const currentUrl = page.url();
+    if (currentUrl.includes('login')) {
+      console.log('  ✗ Still on login page after "success" - FALSE POSITIVE!');
+      throw new Error('Login false positive - still on login page');
+    }
+
+    // Test 2: Try navigating to account overview
+    try {
+      await page.goto('https://my.te.eg/echannel/#/accountoverview', { 
+        waitUntil: 'networkidle2', 
+        timeout: 10000 
+      });
+      await sleep(2000);
+      
+      const finalUrl = page.url();
+      if (finalUrl.includes('login')) {
+        console.log('  ✗ Session invalid - WE redirected back to login');
+        await clearCookies(); // Don't save invalid cookies
+        throw new Error('Session validation failed - redirected to login');
+      }
+      
+      console.log('  ✓ Session validated - URL:', finalUrl);
+    } catch(e) {
+      console.log('  ✗ Session validation error:', e.message);
+      throw new Error('Session validation failed: ' + e.message);
+    }
 
     // Save session cookies for next run
     try {
