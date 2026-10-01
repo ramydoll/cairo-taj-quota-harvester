@@ -502,6 +502,49 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
+    // ══════════════════════════════════════════════════════════════════════════════
+    // PRE-SUBMIT VALIDATION - Verify form is ready before clicking submit
+    // ══════════════════════════════════════════════════════════════════════════════
+    console.log('  [PRE-CHECK] Validating form state before submit...');
+    const formState = await page.evaluate(() => {
+      const username = document.querySelector('#login_loginid_input_01')?.value;
+      const password = document.querySelector('#login_password_input_01')?.value;
+      const dropdownText = document.querySelector('.ant-select-selection-item')?.textContent?.trim();
+      
+      // Check for validation errors
+      const errors = Array.from(document.querySelectorAll('.ant-form-item-explain-error'));
+      const errorTexts = errors.map(e => e.textContent?.trim()).filter(Boolean);
+      
+      return {
+        username: username || '',
+        usernameOk: !!username && username.length > 5,
+        password: password || '',
+        passwordOk: !!password && password.length > 3,
+        dropdown: dropdownText || '',
+        dropdownOk: dropdownText && dropdownText.toLowerCase().includes('internet'),
+        errors: errorTexts,
+        hasErrors: errorTexts.length > 0
+      };
+    });
+
+    console.log('  [PRE-CHECK] State:', {
+      user: formState.usernameOk ? '✓' : '✗',
+      pass: formState.passwordOk ? '✓' : '✗', 
+      drop: formState.dropdownOk ? '✓' : '✗',
+      errors: formState.errors.length
+    });
+
+    if (!formState.usernameOk || !formState.passwordOk || !formState.dropdownOk || formState.hasErrors) {
+      const reason = [];
+      if (!formState.usernameOk) reason.push(`username=${formState.username}`);
+      if (!formState.passwordOk) reason.push(`password empty`);
+      if (!formState.dropdownOk) reason.push(`dropdown="${formState.dropdown}"`);
+      if (formState.hasErrors) reason.push(`errors: ${formState.errors.join(', ')}`);
+      throw new Error(`Form not ready to submit: ${reason.join(', ')}`);
+    }
+
+    console.log('  [PRE-CHECK] ✓ Form ready to submit\n');
+    
     // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
     await sleep(1000);
     const submitSuccess = await page.evaluate(() => {
@@ -511,6 +554,21 @@ async function harvestQuota() {
         inp.dispatchEvent(new Event('blur', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       });
+      
+      // Force complete form validation cycle
+      // Let React/Ant Design process events
+      
+      // Trigger form submit event explicitly
+      const form = document.querySelector('form');
+      if (form) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: false }));
+      }
+      
+      // ============================================================================
+      // ULTIMATE FIX: 100% RELIABLE LOGIN BUTTON DETECTION
+      // Date: 2026-09-21
+      // Fixes: Button outside form + Multiple buttons + Selection priority
+      // ============================================================================
       
       // Step 2: Find the Login button (ULTIMATE STRATEGY - PRIORITY ORDER)
       const btns = Array.from(document.querySelectorAll('button'));
@@ -587,7 +645,7 @@ async function harvestQuota() {
       
       // Log final selection
       console.log(`  [BUTTON-FINAL] Selected: text="${loginBtn.textContent?.trim()}" id="${loginBtn.id}" class="${loginBtn.className}"`);
-      
+
       // Step 3: Ensure button is enabled
       if (loginBtn.disabled) {
         loginBtn.disabled = false;
@@ -641,7 +699,7 @@ async function harvestQuota() {
     }
 
     let postLoginState = 'unknown';
-    for (let tick = 0; tick < 20; tick++) {
+    for (let tick = 0; tick < 30; tick++) {  // Extended from 20s to 30s
       const currentUrl = page.url();
       if (!currentUrl.includes('login')) {
         postLoginState = 'navigated';
@@ -679,7 +737,7 @@ async function harvestQuota() {
     }
 
     if (postLoginState === 'unknown') {
-      throw new Error('Still on login page - no navigation or captcha after 20s');
+      throw new Error('Still on login page - no navigation or captcha after 30s');
     }
 
     // ======================================
@@ -825,24 +883,36 @@ async function harvestQuota() {
         }
         await sleep(5000);
 
-        // Check multiple indicators of success:
-        // 1. Modal closed (captcha was correct)
-        // 2. URL changed away from login (logged in successfully)
-        // 3. No error message visible
+        // Extended wait for WE to fully process the answer
+        await sleep(3000); // Total 8 seconds
+
+        // Comprehensive multi-indicator validation
         const success = await page.evaluate(() => {
-          // Check 1: Is captcha modal still visible?
+          // Check 1: Captcha modal must be completely gone
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"][class*="verification"]');
           const modalVisible = modal && modal.offsetParent !== null;
           
-          // Check 2: Is there a visible error message?
+          // Check 2: No error messages anywhere
           const errorMsg = document.querySelector('.ant-message-error, [class*="error"]');
           const hasError = errorMsg && errorMsg.offsetParent !== null;
           
-          // Check 3: Current URL
+          // Check 3: URL must have changed to account page
           const url = window.location.href;
+          const urlOk = url.includes('accountoverview') || url.includes('anonymoustopup');
           
-          // Success = modal closed AND no error AND not on login page
-          return !modalVisible && !hasError && !url.includes('login');
+          // Check 4: Login form must be GONE (most reliable indicator)
+          const loginForm = document.querySelector('#login_loginid_input_01');
+          const formGone = !loginForm || loginForm.offsetParent === null;
+          
+          console.log('[CAPTCHA-CHECK]', {
+            modalClosed: !modalVisible,
+            noError: !hasError,
+            urlChanged: urlOk,
+            formGone: formGone
+          });
+          
+          // ALL four must be true
+          return !modalVisible && !hasError && urlOk && formGone;
         }).catch(() => false);
 
         return success;
@@ -970,7 +1040,7 @@ async function harvestQuota() {
         }
 
         try {
-          // -- REFRESH LOOP: Try up to 3 refreshes if OCR confidence < 50% ------
+          // -- REFRESH LOOP: Try up to 3 refreshes if OCR confidence < 80% ------
           let ocrAttempt = 0;
           let votes = null;
           let imgHandle = null;
@@ -1004,17 +1074,30 @@ async function harvestQuota() {
 
             // -- Wait for valid captcha image (up to 30s) -----------------------
             imgHandle = null;
-            for (let retry = 0; retry < 30; retry++) {
+            for (let retry = 0; retry < 8; retry++) {  // Reduced from 30 to 8
               imgHandle = await findCaptchaImg();
               const isValid = await page.evaluate(function(el) {
                 if (!el) return false;
-                if (el.naturalWidth > 0) return true;
-                var r = el.getBoundingClientRect();
-                return r.width > 80 && r.height > 25;
+                
+                // PRIORITY 1: Check rendered dimensions FIRST (works for data URIs immediately)
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 80 && rect.height > 25) {
+                  console.log('[IMG-VALID] Dimensions:', rect.width, 'x', rect.height);
+                  return true;
+                }
+                
+                // PRIORITY 2: Fallback to naturalWidth (for remote images)
+                if (el.naturalWidth > 0 && el.naturalHeight > 0) {
+                  console.log('[IMG-VALID] Natural:', el.naturalWidth, 'x', el.naturalHeight);
+                  return true;
+                }
+                
+                console.log('[IMG-INVALID] rect:', rect.width, 'x', rect.height, 'natural:', el.naturalWidth, 'x', el.naturalHeight);
+                return false;
               }, imgHandle).catch(() => false);
               if (isValid) break;
               imgHandle = null;
-              await sleep(1000);
+              await sleep(500);  // Reduced from 1000ms to 500ms
             }
             if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); break; }
 
@@ -1051,11 +1134,11 @@ async function harvestQuota() {
             console.log('    [VOTE] Results:', ranked.map(function(e) { return e[0]+'(w='+e[1].weight+')'; }).join(', '));
             console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / voted=' + filtersVoted + ')');
 
-            if (confidence >= 50 || ocrAttempt >= 3) {
+            if (confidence >= 80 || ocrAttempt >= 3) {
               console.log('    [OCR] Confidence acceptable or max refreshes reached — proceeding to submit');
               break;
             } else {
-              console.log('    [OCR] Confidence < 50%, will refresh captcha image');
+              console.log('    [OCR] Confidence < 80%, will refresh captcha image');
               votes = null; // reset for next attempt
             }
           }
@@ -1067,48 +1150,15 @@ async function harvestQuota() {
 
           const ranked = Object.entries(votes).sort(function(a, b) { return b[1].weight - a[1].weight; });
 
-          // Character substitution for common OCR errors
-          function generateSubstitutions(text) {
-            const subs = [];
-            const chars = text.split('');
-            
-            // Common OCR confusions
-            const confusions = {
-              '0': ['O', '0'],
-              'O': ['0', 'O'],
-              '1': ['I', 'l', '1'],
-              'I': ['1', 'l', 'I'],
-              'l': ['1', 'I', 'l'],
-              '5': ['S', '5'],
-              'S': ['5', 'S'],
-              '8': ['B', '8'],
-              'B': ['8', 'B'],
-              '2': ['Z', '2'],
-              'Z': ['2', 'Z']
-            };
-            
-            // Generate up to 5 substitutions
-            for (let i = 0; i < chars.length && subs.length < 5; i++) {
-              if (confusions[chars[i]]) {
-                confusions[chars[i]].forEach(function(sub) {
-                  const variant = chars.slice(0, i).concat(sub, chars.slice(i + 1)).join('');
-                  if (variant !== text) subs.push(variant);
-                });
-              }
-            }
-            
-            return subs.slice(0, 5);
-          }
-
-          // -- Submit top-8 candidates with expanded case variants ----------------
-          const top8 = ranked.slice(0, 8);
+          // -- Submit top-5 candidates with 7 case variants each ----------------
+          const top5 = ranked.slice(0, 5);
           const triedVariants = {}; // dedup tracker
 
-          for (const entry of top8) {
+          for (const entry of top5) {
             if (captchaSolved) break;
             const orig = entry[1].best;
             
-            // Generate expanded case variants with character substitutions
+            // Generate 7 case variants
             const variants = [
               orig,                                                    // orig
               orig.toUpperCase(),                                      // UPPER
@@ -1117,11 +1167,7 @@ async function harvestQuota() {
               orig.charAt(0).toLowerCase() + orig.slice(1).toUpperCase(), // iNVERTED
               orig.split('').map(function(c, i) { return i % 2 === 0 ? c.toLowerCase() : c.toUpperCase(); }).join(''), // aLtErNaTe
               orig.split('').map(function(c, i) { return i % 2 === 0 ? c.toUpperCase() : c.toLowerCase(); }).join('')  // AlTeRnAtE
-            ].concat(
-              generateSubstitutions(orig),
-              generateSubstitutions(orig.toUpperCase()),
-              generateSubstitutions(orig.toLowerCase())
-            ).filter(function(v, i, arr) { return arr.indexOf(v) === i; }); // dedupe
+            ];
 
             for (let v = 0; v < variants.length; v++) {
               if (captchaSolved) break;
@@ -1129,9 +1175,8 @@ async function harvestQuota() {
               if (triedVariants[attempt]) continue; // skip duplicate
               triedVariants[attempt] = true;
 
-              const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn', 'sub1', 'sub2', 'sub3'];
-              const vName = v < variantNames.length ? variantNames[v] : 'sub' + v;
-              console.log('    -> Trying [' + vName + '] w=' + entry[1].weight + ':', attempt);
+              const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn'];
+              console.log('    -> Trying [' + variantNames[v] + '] w=' + entry[1].weight + ':', attempt);
               captchaSolved = await submitAnswer(attempt);
               if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
               console.log('    X Wrong "' + attempt + '"');
@@ -1161,6 +1206,40 @@ async function harvestQuota() {
     console.log('STEP 2: SERVICE NUMBER (USERNAME)');
     // ══════════════════════════════════════
     console.log('  ✓ Login successful!\n');
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // SESSION VALIDATION - Verify session is truly valid before proceeding
+    // ══════════════════════════════════════════════════════════════════════════════
+    console.log('  [SESSION-CHECK] Validating login session...');
+    await sleep(3000); // Let session stabilize
+
+    // Test 1: Verify current URL is valid
+    const currentUrl = page.url();
+    if (currentUrl.includes('login')) {
+      console.log('  ✗ Still on login page after "success" - FALSE POSITIVE!');
+      throw new Error('Login false positive - still on login page');
+    }
+
+    // Test 2: Try navigating to account overview
+    try {
+      await page.goto('https://my.te.eg/echannel/#/accountoverview', { 
+        waitUntil: 'networkidle2', 
+        timeout: 10000 
+      });
+      await sleep(2000);
+      
+      const finalUrl = page.url();
+      if (finalUrl.includes('login')) {
+        console.log('  ✗ Session invalid - WE redirected back to login');
+        await clearCookies(); // Don't save invalid cookies
+        throw new Error('Session validation failed - redirected to login');
+      }
+      
+      console.log('  ✓ Session validated - URL:', finalUrl);
+    } catch(e) {
+      console.log('  ✗ Session validation error:', e.message);
+      throw new Error('Session validation failed: ' + e.message);
+    }
 
     // Save session cookies for next run
     try {

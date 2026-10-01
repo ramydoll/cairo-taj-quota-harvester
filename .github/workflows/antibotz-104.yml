@@ -1,16 +1,17 @@
-﻿name: Cloud Quota Harvester - Dokki
+name: Antibotz Harvester - Line 104
 
 on:
-  # GitHub Actions cron DISABLED - using external webhook only
-  # (uncomment lines below if webhook service fails)
-  # schedule:
-  #   - cron: '20 */2 * * *'
-  #   - cron: '50 1-23/2 * * *'
-  
+  schedule:
+    # GitHub Actions cron (backup if webhook fails)
+    # Every 90 minutes = :00, :30 of alternating hours
+    - cron: '0 0-22/3 * * *'    # 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
+    - cron: '30 1-23/3 * * *'   # 01:30, 04:30, 07:30, 10:30, 13:30, 16:30, 19:30, 22:30
+
   # PRIMARY TRIGGER: External webhook (100% reliable timing)
+  # Triggered by cron-job.org every 90 minutes exactly
   repository_dispatch:
-    types: [harvest_dokki]
-  
+    types: [antibotz_line104]
+
   workflow_dispatch:
 
 env:
@@ -19,46 +20,41 @@ env:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Chrome
         uses: browser-actions/setup-chrome@v1
         with:
-          chrome-version: 119
+          chrome-version: stable
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+
       - name: Cache npm
         uses: actions/cache@v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('github-harvester/package.json') }}
-      - name: Install Xvfb (virtual display for non-headless Chrome)
-        run: sudo apt-get install -y xvfb
-
-      - name: Start Xvfb virtual display
-        run: |
-          Xvfb :99 -screen 0 1366x768x24 -ac +extension GLX +render -noreset &
-          echo "DISPLAY=:99" >> $GITHUB_ENV
-          sleep 2
-          echo "Xvfb started on display :99"
 
       - name: Install dependencies
         run: |
           cd github-harvester
           npm install --prefer-offline --no-audit
-      - name: Run Dokki harvester
+
+      - name: Run Antibotz harvester — Line 104
         env:
           FIREBASE_API_KEY:    ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          DOKKI_USERNAME:      ${{ secrets.DOKKI_USERNAME }}
-          DOKKI_PASSWORD:      ${{ secrets.DOKKI_PASSWORD }}
+          WE_USERNAME:         ${{ secrets.WE_USERNAME }}
+          WE_PASSWORD:         ${{ secrets.WE_PASSWORD }}
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_ID:   ${{ secrets.TELEGRAM_GROUP_ID }}
         run: |
           cd github-harvester
-          node harvester-dokki.js
+          node antibotz-104.js

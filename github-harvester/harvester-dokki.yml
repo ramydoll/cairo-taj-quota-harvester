@@ -4,13 +4,13 @@ on:
   # GitHub Actions cron DISABLED - using external webhook only
   # (uncomment lines below if webhook service fails)
   # schedule:
-  #   - cron: '20 */2 * * *'
-  #   - cron: '50 1-23/2 * * *'
+  #   - cron: '0 */3 * * *'
   
   # PRIMARY TRIGGER: External webhook (100% reliable timing)
   repository_dispatch:
     types: [harvest_dokki]
   
+  # MANUAL TRIGGER: For testing
   workflow_dispatch:
 
 env:
@@ -19,7 +19,6 @@ env:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,16 +35,6 @@ jobs:
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('github-harvester/package.json') }}
-      - name: Install Xvfb (virtual display for non-headless Chrome)
-        run: sudo apt-get install -y xvfb
-
-      - name: Start Xvfb virtual display
-        run: |
-          Xvfb :99 -screen 0 1366x768x24 -ac +extension GLX +render -noreset &
-          echo "DISPLAY=:99" >> $GITHUB_ENV
-          sleep 2
-          echo "Xvfb started on display :99"
-
       - name: Install dependencies
         run: |
           cd github-harvester

@@ -1,17 +1,16 @@
 {
   "name": "github-cloud-harvester",
   "version": "1.0.0",
-  "description": "Lightweight cloud harvester",
+  "description": "WE Egypt quota harvester",
   "main": "harvester.js",
   "scripts": {
     "start": "node harvester.js"
   },
   "dependencies": {
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "puppeteer-core": "^21.0.0",
-    "node-fetch": "^2.7.0",
-    "tesseract.js": "^5.0.0",
-    "jimp": "^0.22.12"
+    "puppeteer-extra": "3.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2",
+    "puppeteer-core": "21.0.0",
+    "node-fetch": "2.7.0",
+    "tesseract.js": "5.0.0"
   }
 }
