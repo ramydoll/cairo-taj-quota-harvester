@@ -31,6 +31,16 @@ jobs:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('github-harvester/package.json') }}
       
+      - name: Install Xvfb (virtual display for non-headless Chrome)
+        run: sudo apt-get install -y xvfb
+
+      - name: Start Xvfb virtual display
+        run: |
+          Xvfb :99 -screen 0 1366x768x24 -ac +extension GLX +render -noreset &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          sleep 2
+          echo "Xvfb started on display :99"
+
       - name: Install dependencies
         run: |
           cd github-harvester
