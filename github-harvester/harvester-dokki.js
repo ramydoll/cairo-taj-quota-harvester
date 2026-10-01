@@ -98,18 +98,12 @@ async function harvestQuota() {
   // ──────────────────────────────────────────────────────────────────────────
 
   try {
-    // Detect chromium path: GitHub Actions uses setup-chrome which sets CHROME_PATH
-    const fs = require('fs');
-    const candidatePaths = [
-      process.env.CHROME_PATH,
-      '/opt/hostedtoolcache/setup-chrome/chromium/stable/x64/chrome',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/chromium',
-      '/usr/bin/google-chrome-stable'
-    ];
-    const chromiumPath = candidatePaths.find(p => p && fs.existsSync(p));
-    console.log('  [BROWSER] Using chromium path:', chromiumPath || 'NOT FOUND');
-    if (!chromiumPath) throw new Error('No chromium binary found on this system');
+    // Detect chromium path: GitHub Actions uses setup-chrome which sets CHROME_PATH or installs to toolcache
+    const chromiumPath = process.env.CHROME_PATH ||
+      '/opt/hostedtoolcache/setup-chrome/chromium/stable/x64/chrome' ||
+      '/usr/bin/chromium-browser' ||
+      '/usr/bin/chromium' ||
+      '/usr/bin/google-chrome-stable';
 
     browser = await puppeteer.launch({
       headless: false,
