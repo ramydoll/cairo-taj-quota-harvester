@@ -1,0 +1,62 @@
+name: Cloud Quota Harvester - Dokki (Smart Captcha TEST)
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+# Refresh: 2026-08-28
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('github-harvester/package.json') }}
+
+      - name: Install Xvfb (virtual display for non-headless Chrome)
+        run: sudo apt-get install -y xvfb
+
+      - name: Start Xvfb virtual display
+        run: |
+          Xvfb :99 -screen 0 1366x768x24 -ac +extension GLX +render -noreset &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          sleep 2
+          echo "Xvfb started on display :99"
+
+      - name: Install dependencies
+        run: |
+          cd github-harvester
+          npm install --prefer-offline --no-audit
+
+      - name: Run Dokki harvester smart captcha test
+        env:
+          DISPLAY: :99
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          DOKKI_USERNAME: ${{ secrets.DOKKI_USERNAME }}
+          DOKKI_PASSWORD: ${{ secrets.DOKKI_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
+        run: |
+          cd github-harvester
+          node harvester-dokki-test.js
