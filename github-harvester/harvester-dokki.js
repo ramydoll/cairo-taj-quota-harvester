@@ -98,9 +98,16 @@ async function harvestQuota() {
   // ──────────────────────────────────────────────────────────────────────────
 
   try {
+    // Detect chromium path: GitHub Actions uses setup-chrome which sets CHROME_PATH or installs to toolcache
+    const chromiumPath = process.env.CHROME_PATH ||
+      '/opt/hostedtoolcache/setup-chrome/chromium/stable/x64/chrome' ||
+      '/usr/bin/chromium-browser' ||
+      '/usr/bin/chromium' ||
+      '/usr/bin/google-chrome-stable';
+
     browser = await puppeteer.launch({
-      headless: true,
-      executablePath: '/usr/bin/google-chrome-stable',
+      headless: false,
+      executablePath: chromiumPath,
       protocolTimeout: 60000,
       args: [
         '--no-sandbox',
@@ -108,7 +115,14 @@ async function harvestQuota() {
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
-        '--window-size=1366,768'
+        '--window-size=1366,768',
+        '--display=:99',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-infobars',
+        '--disable-notifications',
+        '--ignore-certificate-errors'
       ],
       ignoreDefaultArgs: ['--enable-automation']
     });
@@ -982,20 +996,51 @@ async function harvestQuota() {
               const refreshed = await page.evaluate(() => {
                 const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
                 if (!modal) return false;
-                // Find refresh/reload button near captcha (usually has reload icon or "Refresh" text)
+
+                // ── STRATEGY 1: Purple/colored IMG next to captcha (WE's actual refresh button) ──
+                const imgs = Array.from(modal.querySelectorAll('img'));
+                for (const img of imgs) {
+                  const r = img.getBoundingClientRect();
+                  // Small icon-sized image = refresh button (not the captcha itself which is wide)
+                  if (r.width > 10 && r.width < 60 && r.height > 10 && r.height < 60) {
+                    img.click();
+                    console.log('[REFRESH] Clicked purple IMG icon (w=' + r.width + ' h=' + r.height + ')');
+                    return true;
+                  }
+                }
+                // ── STRATEGY 2: Purple/colored element by computed style ──
+                const allEls = Array.from(modal.querySelectorAll('img, button, span, i, svg'));
+                for (const el of allEls) {
+                  try {
+                    const style = window.getComputedStyle(el);
+                    const color = style.color || '';
+                    const bg = style.backgroundColor || '';
+                    if (/rgb\(1[2-9]\d|rgb\([5-9]\d,\s*0,\s*[5-9]\d|rgb\(1[0-5]\d,\s*[0-5]\d,\s*1[2-9]\d/.test(color) ||
+                        /rgb\(1[2-9]\d|rgb\([5-9]\d,\s*0,\s*[5-9]\d|rgb\(1[0-5]\d,\s*[0-5]\d,\s*1[2-9]\d/.test(bg)) {
+                      const r = el.getBoundingClientRect();
+                      if (r.width > 5 && r.height > 5) {
+                        el.click();
+                        console.log('[REFRESH] Clicked purple element: ' + el.tagName);
+                        return true;
+                      }
+                    }
+                  } catch(e) {}
+                }
+                // ── STRATEGY 3: Button/icon with reload class ──
                 const btns = Array.from(modal.querySelectorAll('button, .anticon-reload, [class*="reload"], [class*="refresh"]'));
                 const refreshBtn = btns.find(b => 
-                  b.className && (b.className.includes('reload') || b.className.includes('refresh')) ||
-                  b.textContent && /refresh|reload/i.test(b.textContent) ||
+                  (b.className && (b.className.includes('reload') || b.className.includes('refresh'))) ||
+                  (b.textContent && /refresh|reload/i.test(b.textContent)) ||
                   b.querySelector('.anticon-reload')
                 );
-                if (refreshBtn) {
-                  refreshBtn.click();
-                  return true;
-                }
-                // Fallback: click img itself (some captchas refresh on img click)
-                const img = modal.querySelector('img');
-                if (img) { img.click(); return true; }
+                if (refreshBtn) { refreshBtn.click(); return true; }
+
+                // ── STRATEGY 4: Click captcha image itself ──
+                const captchaImgs = imgs.filter(img => {
+                  const r = img.getBoundingClientRect();
+                  return r.width > 80 && r.height > 25;
+                });
+                if (captchaImgs.length) { captchaImgs[0].click(); return true; }
                 return false;
               });
               if (!refreshed) { console.log('    ! Refresh button not found, proceeding with current image'); break; }
@@ -1933,10 +1978,10 @@ async function harvestQuota() {
         console.log('  [VIGILANCE] Session died — restarting fresh session...');
         try { await browser.close(); } catch(e) {}
         browser = await puppeteer.launch({
-          headless: true, executablePath: '/usr/bin/google-chrome-stable',
+          headless: false, executablePath: chromiumPath,
           protocolTimeout: 60000,
           args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                 '--disable-blink-features=AutomationControlled',
+                 '--disable-blink-features=AutomationControlled','--display=:99','--disable-gpu',
                  '--disable-features=IsolateOrigins,site-per-process','--window-size=1366,768'],
           ignoreDefaultArgs: ['--enable-automation']
         });
