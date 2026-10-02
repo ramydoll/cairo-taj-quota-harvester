@@ -123,8 +123,7 @@ async function harvestQuota() {
         '--disable-infobars',
         '--disable-notifications',
         '--ignore-certificate-errors',
-        // ── ULTIMATE CDP BLOCKER: Disable DevTools at root level ──
-        '--disable-dev-tools',
+        // ── CDP BLOCKER: Stealth flags (disable-dev-tools removed - broke page rendering) ──
         '--disable-remote-fonts',
         '--disable-default-apps',
         '--no-first-run',
