@@ -2017,11 +2017,10 @@ async function harvestQuota() {
 }
 
 async function main() {
-  // Random startup delay: 1-14 minutes
-  // Prevents predictable bot-like patterns when cron-job.org fires at fixed intervals
-  const startDelay = randomDelay(60000, 14 * 60 * 1000);
-  console.log(`⏳ Random startup delay: ${Math.floor(startDelay/60000)}m ${Math.floor((startDelay%60000)/1000)}s (anti-pattern protection)`);
-  await sleep(startDelay);
+  // RANDOM DELAY DISABLED FOR TESTING - re-enable when ready
+  // const startDelay = randomDelay(60000, 14 * 60 * 1000);
+  // console.log(`⏳ Random startup delay: ${Math.floor(startDelay/60000)}m ${Math.floor((startDelay%60000)/1000)}s (anti-pattern protection)`);
+  // await sleep(startDelay);
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
