@@ -133,26 +133,113 @@ async function harvestQuota() {
 
     page = await browser.newPage();
 
-    await page.evaluateOnNewDocument(() => {
-      // Kill alert/confirm/prompt before site JS runs - prevents "Prohibit use of console" dialog
-      window.alert = () => {};
-      window.confirm = () => true;
-      window.prompt = () => '';
-      
-      // Protect console from being overridden by site
-      Object.defineProperty(window, 'console', {
-        writable: false,
-        configurable: false
-      });
-      
-      // Existing stealth
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      window.navigator.chrome = { runtime: {} };
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    });
+    // Get real browser UA dynamically — avoids version mismatch detection
+    const realUA = await browser.userAgent();
+    const stealthUA = realUA
+      .replace('HeadlessChrome', 'Chrome')  // remove headless marker if any
+      .replace(/Headless/g, '');            // belt and braces
+    console.log('  [STEALTH] Real browser UA:', stealthUA.slice(0, 80) + '...');
 
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    await page.evaluateOnNewDocument((ua) => {
+      // ── BLOCK WE's "Prohibit use of console" dialog completely ──
+      // WE uses setInterval to repeatedly call alert() — kill all dialog methods permanently
+      window.alert   = () => {};
+      window.confirm = () => true;
+      window.prompt  = () => '';
+
+      // Kill setInterval/setTimeout that WE uses to keep re-triggering the dialog
+      const _origSetInterval = window.setInterval;
+      const _origSetTimeout  = window.setTimeout;
+      window.setInterval = function(fn, delay, ...args) {
+        try {
+          const fnStr = fn ? fn.toString() : '';
+          // Block any interval that mentions console, alert, debugger, or devtools
+          if (/console|alert|debugger|devtools|firebug|__secret/i.test(fnStr)) {
+            return 0; // silently drop it
+          }
+        } catch(e) {}
+        return _origSetInterval(fn, delay, ...args);
+      };
+      window.setTimeout = function(fn, delay, ...args) {
+        try {
+          const fnStr = fn ? fn.toString() : '';
+          if (/console|alert|debugger|devtools|firebug|__secret/i.test(fnStr)) {
+            return 0;
+          }
+        } catch(e) {}
+        return _origSetTimeout(fn, delay, ...args);
+      };
+
+      // Lock console so WE can't override or detect it
+      // Key: hide _commandLineAPI which is CDP's marker that triggers WE's detection
+      const _fakeConsole = new Proxy(console, {
+        get(target, prop) {
+          if (prop === '_commandLineAPI') return undefined; // ← CDP detection marker
+          if (prop === 'constructor') return Object;
+          const val = target[prop];
+          if (typeof val === 'function') {
+            return new Proxy(val, {
+              apply(fn, ctx, args) { try { return Reflect.apply(fn, ctx, args); } catch(e) {} },
+              get(fn, p) {
+                if (p === 'toString') return () => `function ${fn.name || p}() { [native code] }`;
+                return fn[p];
+              }
+            });
+          }
+          return val;
+        },
+        set() { return true; }
+      });
+      try {
+        Object.defineProperty(window, 'console', {
+          get: () => _fakeConsole,
+          set: () => {},
+          configurable: false,
+          enumerable: true
+        });
+      } catch(e) {}
+
+      // Fix outerWidth/outerHeight — headless = 0 which WE detects
+      try {
+        Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1366 });
+        Object.defineProperty(window, 'outerHeight', { get: () => (window.innerHeight || 768) + 88 });
+      } catch(e) {}
+
+      // Block debugger statements injected by WE
+      // Override Function constructor to neutralize debugger traps
+      const _OrigFunction = window.Function;
+      window.Function = function(...args) {
+        const body = args[args.length - 1] || '';
+        if (/debugger|console\.clear|devtools/i.test(body)) {
+          args[args.length - 1] = ''; // empty the function body
+        }
+        return _OrigFunction(...args);
+      };
+      Object.setPrototypeOf(window.Function, _OrigFunction);
+
+      // Stealth — hide automation fingerprints
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['ar-EG', 'ar', 'en-US', 'en'] });
+      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+      Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+      // Chrome runtime — must match real Chrome object shape
+      window.navigator.chrome = {
+        runtime: {},
+        loadTimes: function() {},
+        csi: function() {},
+        app: {}
+      };
+      // Spoof permissions
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) =>
+        parameters.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : originalQuery(parameters);
+    }, stealthUA);
+
+    await page.setUserAgent(stealthUA);
     await page.setViewport({ width: 1366, height: 768 });
 
     page.on('dialog', async dialog => {
@@ -1759,7 +1846,9 @@ async function harvestQuota() {
           Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
           Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
         });
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        const realUA2 = await browser.userAgent();
+        const stealthUA2 = realUA2.replace('HeadlessChrome', 'Chrome').replace(/Headless/g, '');
+        await page.setUserAgent(stealthUA2);
         await page.setViewport({ width: 1366, height: 768 });
         page.on('dialog', async dialog => { await dialog.accept(); });
 
