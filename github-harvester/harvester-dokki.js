@@ -122,7 +122,13 @@ async function harvestQuota() {
         '--disable-extensions',
         '--disable-infobars',
         '--disable-notifications',
-        '--ignore-certificate-errors'
+        '--ignore-certificate-errors',
+        // ── ULTIMATE CDP BLOCKER: Disable DevTools at root level ──
+        '--disable-dev-tools',
+        '--disable-remote-fonts',
+        '--disable-default-apps',
+        '--no-first-run',
+        '--disable-hang-monitor'
       ],
       ignoreDefaultArgs: ['--enable-automation']
     });
@@ -137,22 +143,66 @@ async function harvestQuota() {
     console.log('  [STEALTH] Real browser UA:', stealthUA.slice(0, 80) + '...');
 
     await page.evaluateOnNewDocument((ua) => {
-      // ── BLOCK WE's "Prohibit use of console" dialog completely ──
-      // WE uses setInterval to repeatedly call alert() — kill all dialog methods permanently
+      // ══════════════════════════════════════════════════════════════════════════════
+      // ULTIMATE CDP BLOCKER — Prevent "Prohibit use of console" dialog from triggering
+      // ══════════════════════════════════════════════════════════════════════════════
+      
+      // 1. Kill ALL dialog methods that WE uses to show the alert
       window.alert   = () => {};
       window.confirm = () => true;
       window.prompt  = () => '';
-
-      // Lock console so WE can't override or detect it
-      // Key: hide _commandLineAPI which is CDP's marker that triggers WE's detection
-      const _fakeConsole = new Proxy(console, {
+      
+      // 2. AGGRESSIVELY remove CDP markers BEFORE WE can detect them
+      try {
+        delete console._commandLineAPI;
+        delete window.console._commandLineAPI;
+      } catch(e) {}
+      
+      // 3. Freeze console to prevent WE from adding CDP markers or overriding methods
+      try {
+        Object.freeze(console);
+        Object.freeze(console.log);
+        Object.freeze(console.warn);
+        Object.freeze(console.error);
+      } catch(e) {}
+      
+      // 4. Remove ALL automation/DevTools global objects
+      try {
+        delete window.__playwright;
+        delete window.__puppeteer;
+        delete window.__selenium;
+        delete window.__webdriver;
+        delete window.__driver;
+        delete window.emit;
+        delete window.on;
+        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+      } catch(e) {}
+      
+      // 5. Hide CDP runtime methods in chrome object
+      if (window.chrome && window.chrome.runtime) {
+        try {
+          delete window.chrome.runtime.sendMessage;
+          delete window.chrome.runtime.connect;
+        } catch(e) {}
+      }
+      
+      // 6. Now wrap console with Proxy to intercept any future CDP marker checks
+      const _realConsole = window.console;
+      const _fakeConsole = new Proxy(_realConsole, {
         get(target, prop) {
-          if (prop === '_commandLineAPI') return undefined; // ← CDP detection marker
+          // CRITICAL: Hide _commandLineAPI marker that WE checks
+          if (prop === '_commandLineAPI') return undefined;
           if (prop === 'constructor') return Object;
           const val = target[prop];
           if (typeof val === 'function') {
             return new Proxy(val, {
-              apply(fn, ctx, args) { try { return Reflect.apply(fn, ctx, args); } catch(e) {} },
+              apply(fn, ctx, args) { 
+                try { 
+                  return Reflect.apply(fn, ctx, args); 
+                } catch(e) {} 
+              },
               get(fn, p) {
                 if (p === 'toString') return () => `function ${fn.name || p}() { [native code] }`;
                 return fn[p];
@@ -161,12 +211,15 @@ async function harvestQuota() {
           }
           return val;
         },
-        set() { return true; }
+        set() { return true; },  // Block any attempts to modify console
+        deleteProperty() { return false; }  // Block deletion attempts
       });
+      
+      // 7. Lock console property on window so WE can't replace it
       try {
         Object.defineProperty(window, 'console', {
           get: () => _fakeConsole,
-          set: () => {},
+          set: () => {},  // Ignore all set attempts
           configurable: false,
           enumerable: true
         });
