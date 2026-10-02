@@ -54,7 +54,9 @@ async function harvestQuota() {
   console.log('🚀 STARTING...\n');
   let browser, page;
 
-  // ── Session Cookie Helpers (Dokki) ────────────────────────────────────────
+  // ── Session Cookie Helpers ─────────────────────────────────────────────────
+  // Save/load cookies via Firestore so we can skip login when session is still valid
+  // Cookies stored in quota_settings/session_dokki as a JSON string
   async function loadSavedCookies() {
     try {
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
@@ -64,8 +66,9 @@ async function harvestQuota() {
       const cookieStr = doc?.fields?.cookies?.stringValue;
       const savedAt = doc?.fields?.savedAt?.stringValue;
       if (!cookieStr || !savedAt) return null;
+      // Only use cookies saved within last 4 hours
       const age = Date.now() - new Date(savedAt).getTime();
-      if (age > 4 * 60 * 60 * 1000) { console.log('  [SESSION] Cookies expired (>4h old), fresh login'); return null; }
+      if (age > 4 * 60 * 60 * 1000) { console.log('  [SESSION] Cookies expired (>4h old), will do fresh login'); return null; }
       console.log('  [SESSION] Found saved cookies (' + Math.floor(age/60000) + 'm old)');
       return JSON.parse(cookieStr);
     } catch(e) { console.log('  [SESSION] Could not load cookies:', e.message); return null; }
@@ -75,7 +78,8 @@ async function harvestQuota() {
     try {
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/session_dokki?key=${FIREBASE_API_KEY}`;
       await fetch(url, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields: {
           cookies:  { stringValue: JSON.stringify(cookies) },
           savedAt:  { stringValue: new Date().toISOString() },
@@ -92,23 +96,39 @@ async function harvestQuota() {
       await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields: { cookies: { stringValue: '' }, savedAt: { stringValue: '' } }})
       });
-      console.log('  [SESSION] Cookies cleared');
+      console.log('  [SESSION] Cookies cleared from Firestore');
     } catch(e) {}
   }
   // ──────────────────────────────────────────────────────────────────────────
 
   try {
+    // Detect chromium path: GitHub Actions uses setup-chrome which sets CHROME_PATH or installs to toolcache
+    const chromiumPath = process.env.CHROME_PATH ||
+      '/opt/hostedtoolcache/setup-chrome/chromium/stable/x64/chrome' ||
+      '/usr/bin/chromium-browser' ||
+      '/usr/bin/chromium' ||
+      '/usr/bin/google-chrome-stable';
+
     browser = await puppeteer.launch({
-      headless: true,
-      executablePath: '/usr/bin/google-chrome-stable',
+      headless: false,
+      executablePath: chromiumPath,
       protocolTimeout: 60000,
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--window-size=1366,768'
+        '--window-size=1366,768',
+        '--display=:99',
+        '--start-maximized',
+        '--disable-infobars',
+        '--disable-notifications',
+        '--disable-popup-blocking',
+        '--lang=en-US',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-background-timer-throttling',
+        '--password-store=basic',
+        '--use-mock-keychain'
       ],
       ignoreDefaultArgs: ['--enable-automation']
     });
@@ -116,25 +136,165 @@ async function harvestQuota() {
     page = await browser.newPage();
 
     await page.evaluateOnNewDocument(() => {
-      // Kill alert/confirm/prompt before site JS runs - prevents "Prohibit use of console" dialog
+      // 1. Alert/Confirm/Prompt blockers
       window.alert = () => {};
       window.confirm = () => true;
       window.prompt = () => '';
       
-      // Protect console from being overridden by site
+      // 2. Console protection
       Object.defineProperty(window, 'console', {
         writable: false,
         configurable: false
       });
       
-      // Existing stealth
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      window.navigator.chrome = { runtime: {} };
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      // 3. Webdriver flag
+      Object.defineProperty(navigator, 'webdriver', { 
+        get: () => false 
+      });
+      
+      // 4. Chrome object (COMPLETE)
+      window.navigator.chrome = {
+        runtime: {},
+        loadTimes: function() {},
+        csi: function() {},
+        app: {}
+      };
+      
+      // 5. REALISTIC Plugins (with actual names!)
+      const fakePlugins = [
+        {
+          name: 'Chrome PDF Plugin',
+          description: 'Portable Document Format',
+          filename: 'internal-pdf-viewer',
+          length: 1
+        },
+        {
+          name: 'Chrome PDF Viewer',
+          description: 'Portable Document Format', 
+          filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+          length: 1
+        },
+        {
+          name: 'Native Client',
+          description: 'Native Client Executable',
+          filename: 'internal-nacl-plugin',
+          length: 1
+        }
+      ];
+      fakePlugins.length = 3;
+      
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => fakePlugins
+      });
+      
+      // 6. MimeTypes (MUST match plugins!)
+      const fakeMimeTypes = [
+        {
+          type: 'application/pdf',
+          suffixes: 'pdf',
+          description: 'Portable Document Format',
+          enabledPlugin: fakePlugins[0]
+        },
+        {
+          type: 'application/x-nacl',
+          suffixes: '',
+          description: 'Native Client Executable',
+          enabledPlugin: fakePlugins[2]
+        }
+      ];
+      fakeMimeTypes.length = 2;
+      
+      Object.defineProperty(navigator, 'mimeTypes', {
+        get: () => fakeMimeTypes
+      });
+      
+      // 7. Languages
+      Object.defineProperty(navigator, 'languages', { 
+        get: () => ['en-US', 'en', 'ar'] 
+      });
+      
+      // 8. Platform (match Linux since we're on Ubuntu)
+      Object.defineProperty(navigator, 'platform', {
+        get: () => 'Linux x86_64'
+      });
+      
+      // 9. Hardware concurrency
+      Object.defineProperty(navigator, 'hardwareConcurrency', {
+        get: () => 2
+      });
+      
+      // 10. Device memory
+      Object.defineProperty(navigator, 'deviceMemory', {
+        get: () => 8
+      });
+      
+      // 11. Permissions API (CRITICAL!)
+      const originalQuery = navigator.permissions.query;
+      navigator.permissions.query = (parameters) => {
+        return Promise.resolve({ 
+          state: 'prompt', 
+          onchange: null 
+        });
+      };
+      
+      // 12. Battery API
+      navigator.getBattery = () => Promise.resolve({
+        charging: true,
+        chargingTime: 0,
+        dischargingTime: Infinity,
+        level: 1
+      });
+      
+      // 13. Connection API
+      Object.defineProperty(navigator, 'connection', {
+        get: () => ({
+          effectiveType: '4g',
+          downlink: 10,
+          rtt: 50,
+          saveData: false
+        })
+      });
+      
+      // 14. WebGL vendor/renderer masking (hide Xvfb!)
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(parameter) {
+        // 37445 = UNMASKED_VENDOR_WEBGL
+        // 37446 = UNMASKED_RENDERER_WEBGL
+        if (parameter === 37445) return 'Intel Inc.';
+        if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+        return getParameter.apply(this, arguments);
+      };
+      
+      // Apply same to WebGL2
+      if (typeof WebGL2RenderingContext !== 'undefined') {
+        const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
+        WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+          if (parameter === 37445) return 'Intel Inc.';
+          if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+          return getParameter2.apply(this, arguments);
+        };
+      }
+      
+      // 15. Notification permission
+      Object.defineProperty(Notification, 'permission', {
+        get: () => 'default'
+      });
+      
+      // 16. Remove automation flags
+      delete window.__nightmare;
+      delete window._phantom;
+      delete window.callPhantom;
+      delete window.__phantomas;
+      delete window.Buffer;
+      
+      // 17. Screen properties (match Xvfb display)
+      Object.defineProperty(screen, 'availWidth', { get: () => 1366 });
+      Object.defineProperty(screen, 'availHeight', { get: () => 768 });
+      Object.defineProperty(screen, 'width', { get: () => 1366 });
+      Object.defineProperty(screen, 'height', { get: () => 768 });
     });
 
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    // User-Agent removed - let Chrome use its REAL User-Agent to match browser version/OS
     await page.setViewport({ width: 1366, height: 768 });
 
     page.on('dialog', async dialog => {
@@ -502,49 +662,6 @@ async function harvestQuota() {
     console.log('STEP 5: SUBMIT');
     // ======================================
     
-    // ══════════════════════════════════════════════════════════════════════════════
-    // PRE-SUBMIT VALIDATION - Verify form is ready before clicking submit
-    // ══════════════════════════════════════════════════════════════════════════════
-    console.log('  [PRE-CHECK] Validating form state before submit...');
-    const formState = await page.evaluate(() => {
-      const username = document.querySelector('#login_loginid_input_01')?.value;
-      const password = document.querySelector('#login_password_input_01')?.value;
-      const dropdownText = document.querySelector('.ant-select-selection-item')?.textContent?.trim();
-      
-      // Check for validation errors
-      const errors = Array.from(document.querySelectorAll('.ant-form-item-explain-error'));
-      const errorTexts = errors.map(e => e.textContent?.trim()).filter(Boolean);
-      
-      return {
-        username: username || '',
-        usernameOk: !!username && username.length > 5,
-        password: password || '',
-        passwordOk: !!password && password.length > 3,
-        dropdown: dropdownText || '',
-        dropdownOk: dropdownText && dropdownText.toLowerCase().includes('internet'),
-        errors: errorTexts,
-        hasErrors: errorTexts.length > 0
-      };
-    });
-
-    console.log('  [PRE-CHECK] State:', {
-      user: formState.usernameOk ? '✓' : '✗',
-      pass: formState.passwordOk ? '✓' : '✗', 
-      drop: formState.dropdownOk ? '✓' : '✗',
-      errors: formState.errors.length
-    });
-
-    if (!formState.usernameOk || !formState.passwordOk || !formState.dropdownOk || formState.hasErrors) {
-      const reason = [];
-      if (!formState.usernameOk) reason.push(`username=${formState.username}`);
-      if (!formState.passwordOk) reason.push(`password empty`);
-      if (!formState.dropdownOk) reason.push(`dropdown="${formState.dropdown}"`);
-      if (formState.hasErrors) reason.push(`errors: ${formState.errors.join(', ')}`);
-      throw new Error(`Form not ready to submit: ${reason.join(', ')}`);
-    }
-
-    console.log('  [PRE-CHECK] ✓ Form ready to submit\n');
-    
     // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
     await sleep(1000);
     const submitSuccess = await page.evaluate(() => {
@@ -554,21 +671,6 @@ async function harvestQuota() {
         inp.dispatchEvent(new Event('blur', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       });
-      
-      // Force complete form validation cycle
-      // Let React/Ant Design process events
-      
-      // Trigger form submit event explicitly
-      const form = document.querySelector('form');
-      if (form) {
-        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: false }));
-      }
-      
-      // ============================================================================
-      // ULTIMATE FIX: 100% RELIABLE LOGIN BUTTON DETECTION
-      // Date: 2026-09-21
-      // Fixes: Button outside form + Multiple buttons + Selection priority
-      // ============================================================================
       
       // Step 2: Find the Login button (ULTIMATE STRATEGY - PRIORITY ORDER)
       const btns = Array.from(document.querySelectorAll('button'));
@@ -645,7 +747,7 @@ async function harvestQuota() {
       
       // Log final selection
       console.log(`  [BUTTON-FINAL] Selected: text="${loginBtn.textContent?.trim()}" id="${loginBtn.id}" class="${loginBtn.className}"`);
-
+      
       // Step 3: Ensure button is enabled
       if (loginBtn.disabled) {
         loginBtn.disabled = false;
@@ -699,23 +801,26 @@ async function harvestQuota() {
     }
 
     let postLoginState = 'unknown';
-    for (let tick = 0; tick < 30; tick++) {  // Extended from 20s to 30s
+    for (let tick = 0; tick < 20; tick++) {
       const currentUrl = page.url();
       if (!currentUrl.includes('login')) {
         postLoginState = 'navigated';
         console.log('  [OK] URL changed to:', currentUrl);
         break;
       }
+      // Check for captcha OR block message
       const pageState = await page.evaluate(() => {
         const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"], [class*="verification"]');
         const text = document.body.innerText.toLowerCase();
         const hasCaptcha = !!modal || text.includes('verification') || text.includes('enter code');
+        // Detect WE block messages
         const isBlocked = text.includes('maximum') || text.includes('too many') ||
                           text.includes('exceeded') || text.includes('try again') ||
                           text.includes('blocked') || text.includes('محاولات') ||
                           text.includes('الحد الاقصى') || text.includes('مره اخرى');
         return { hasCaptcha, isBlocked, text: text.slice(0, 200) };
       });
+
       if (pageState.isBlocked) {
         postLoginState = 'blocked';
         console.log('  [BLOCKED] WE has blocked this IP/account temporarily');
@@ -731,13 +836,14 @@ async function harvestQuota() {
       await sleep(1000);
     }
 
+    // Handle blocked state — clear cookies and exit cleanly (don't retry)
     if (postLoginState === 'blocked') {
-      await clearCookies();
-      throw new Error('WE_BLOCKED: Account/IP temporarily blocked. Will auto-retry on next scheduled run.');
+      await clearCookies(); // Clear any saved session
+      throw new Error('WE_BLOCKED: Account/IP temporarily blocked. Will auto-retry on next scheduled run (2h).');
     }
 
     if (postLoginState === 'unknown') {
-      throw new Error('Still on login page - no navigation or captcha after 30s');
+      throw new Error('Still on login page - no navigation or captcha after 20s');
     }
 
     // ======================================
@@ -883,36 +989,24 @@ async function harvestQuota() {
         }
         await sleep(5000);
 
-        // Extended wait for WE to fully process the answer
-        await sleep(3000); // Total 8 seconds
-
-        // Comprehensive multi-indicator validation
+        // Check multiple indicators of success:
+        // 1. Modal closed (captcha was correct)
+        // 2. URL changed away from login (logged in successfully)
+        // 3. No error message visible
         const success = await page.evaluate(() => {
-          // Check 1: Captcha modal must be completely gone
+          // Check 1: Is captcha modal still visible?
           const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"][class*="verification"]');
           const modalVisible = modal && modal.offsetParent !== null;
           
-          // Check 2: No error messages anywhere
+          // Check 2: Is there a visible error message?
           const errorMsg = document.querySelector('.ant-message-error, [class*="error"]');
           const hasError = errorMsg && errorMsg.offsetParent !== null;
           
-          // Check 3: URL must have changed to account page
+          // Check 3: Current URL
           const url = window.location.href;
-          const urlOk = url.includes('accountoverview') || url.includes('anonymoustopup');
           
-          // Check 4: Login form must be GONE (most reliable indicator)
-          const loginForm = document.querySelector('#login_loginid_input_01');
-          const formGone = !loginForm || loginForm.offsetParent === null;
-          
-          console.log('[CAPTCHA-CHECK]', {
-            modalClosed: !modalVisible,
-            noError: !hasError,
-            urlChanged: urlOk,
-            formGone: formGone
-          });
-          
-          // ALL four must be true
-          return !modalVisible && !hasError && urlOk && formGone;
+          // Success = modal closed AND no error AND not on login page
+          return !modalVisible && !hasError && !url.includes('login');
         }).catch(() => false);
 
         return success;
@@ -1040,7 +1134,7 @@ async function harvestQuota() {
         }
 
         try {
-          // -- REFRESH LOOP: Try up to 3 refreshes if OCR confidence < 80% ------
+          // -- REFRESH LOOP: Try up to 3 refreshes if OCR confidence < 50% ------
           let ocrAttempt = 0;
           let votes = null;
           let imgHandle = null;
@@ -1052,20 +1146,52 @@ async function harvestQuota() {
               const refreshed = await page.evaluate(() => {
                 const modal = document.querySelector('.ant-modal-content, .ant-modal, [class*="modal"]');
                 if (!modal) return false;
-                // Find refresh/reload button near captcha (usually has reload icon or "Refresh" text)
+
+                // ── STRATEGY 1: Purple/colored IMG next to captcha (WE's actual refresh button) ──
+                const imgs = Array.from(modal.querySelectorAll('img'));
+                for (const img of imgs) {
+                  const r = img.getBoundingClientRect();
+                  // Small icon-sized image = refresh button (not the captcha itself which is wide)
+                  if (r.width > 10 && r.width < 60 && r.height > 10 && r.height < 60) {
+                    img.click();
+                    console.log('[REFRESH] Clicked purple IMG icon (w=' + r.width + ' h=' + r.height + ')');
+                    return true;
+                  }
+                }
+                // ── STRATEGY 2: Purple/colored element by computed style ──
+                const allEls = Array.from(modal.querySelectorAll('img, button, span, i, svg'));
+                for (const el of allEls) {
+                  try {
+                    const style = window.getComputedStyle(el);
+                    const color = style.color || '';
+                    const bg = style.backgroundColor || '';
+                    // Purple color detection (rgb around 128,0,128 or similar purples)
+                    if (/rgb\(1[2-9]\d|rgb\([5-9]\d,\s*0,\s*[5-9]\d|rgb\(1[0-5]\d,\s*[0-5]\d,\s*1[2-9]\d/.test(color) ||
+                        /rgb\(1[2-9]\d|rgb\([5-9]\d,\s*0,\s*[5-9]\d|rgb\(1[0-5]\d,\s*[0-5]\d,\s*1[2-9]\d/.test(bg)) {
+                      const r = el.getBoundingClientRect();
+                      if (r.width > 5 && r.height > 5) {
+                        el.click();
+                        console.log('[REFRESH] Clicked purple element: ' + el.tagName);
+                        return true;
+                      }
+                    }
+                  } catch(e) {}
+                }
+                // ── STRATEGY 3: Button/icon with reload class ──
                 const btns = Array.from(modal.querySelectorAll('button, .anticon-reload, [class*="reload"], [class*="refresh"]'));
                 const refreshBtn = btns.find(b => 
-                  b.className && (b.className.includes('reload') || b.className.includes('refresh')) ||
-                  b.textContent && /refresh|reload/i.test(b.textContent) ||
+                  (b.className && (b.className.includes('reload') || b.className.includes('refresh'))) ||
+                  (b.textContent && /refresh|reload/i.test(b.textContent)) ||
                   b.querySelector('.anticon-reload')
                 );
-                if (refreshBtn) {
-                  refreshBtn.click();
-                  return true;
-                }
-                // Fallback: click img itself (some captchas refresh on img click)
-                const img = modal.querySelector('img');
-                if (img) { img.click(); return true; }
+                if (refreshBtn) { refreshBtn.click(); return true; }
+
+                // ── STRATEGY 4: Click captcha image itself ──
+                const captchaImgs = imgs.filter(img => {
+                  const r = img.getBoundingClientRect();
+                  return r.width > 80 && r.height > 25;
+                });
+                if (captchaImgs.length) { captchaImgs[0].click(); return true; }
                 return false;
               });
               if (!refreshed) { console.log('    ! Refresh button not found, proceeding with current image'); break; }
@@ -1074,30 +1200,17 @@ async function harvestQuota() {
 
             // -- Wait for valid captcha image (up to 30s) -----------------------
             imgHandle = null;
-            for (let retry = 0; retry < 8; retry++) {  // Reduced from 30 to 8
+            for (let retry = 0; retry < 30; retry++) {
               imgHandle = await findCaptchaImg();
               const isValid = await page.evaluate(function(el) {
                 if (!el) return false;
-                
-                // PRIORITY 1: Check rendered dimensions FIRST (works for data URIs immediately)
-                const rect = el.getBoundingClientRect();
-                if (rect.width > 80 && rect.height > 25) {
-                  console.log('[IMG-VALID] Dimensions:', rect.width, 'x', rect.height);
-                  return true;
-                }
-                
-                // PRIORITY 2: Fallback to naturalWidth (for remote images)
-                if (el.naturalWidth > 0 && el.naturalHeight > 0) {
-                  console.log('[IMG-VALID] Natural:', el.naturalWidth, 'x', el.naturalHeight);
-                  return true;
-                }
-                
-                console.log('[IMG-INVALID] rect:', rect.width, 'x', rect.height, 'natural:', el.naturalWidth, 'x', el.naturalHeight);
-                return false;
+                if (el.naturalWidth > 0) return true;
+                var r = el.getBoundingClientRect();
+                return r.width > 80 && r.height > 25;
               }, imgHandle).catch(() => false);
               if (isValid) break;
               imgHandle = null;
-              await sleep(500);  // Reduced from 1000ms to 500ms
+              await sleep(1000);
             }
             if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); break; }
 
@@ -1134,11 +1247,11 @@ async function harvestQuota() {
             console.log('    [VOTE] Results:', ranked.map(function(e) { return e[0]+'(w='+e[1].weight+')'; }).join(', '));
             console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / voted=' + filtersVoted + ')');
 
-            if (confidence >= 80 || ocrAttempt >= 3) {
+            if (confidence >= 50 || ocrAttempt >= 3) {
               console.log('    [OCR] Confidence acceptable or max refreshes reached — proceeding to submit');
               break;
             } else {
-              console.log('    [OCR] Confidence < 80%, will refresh captcha image');
+              console.log('    [OCR] Confidence < 50%, will refresh captcha image');
               votes = null; // reset for next attempt
             }
           }
@@ -1150,15 +1263,48 @@ async function harvestQuota() {
 
           const ranked = Object.entries(votes).sort(function(a, b) { return b[1].weight - a[1].weight; });
 
-          // -- Submit top-5 candidates with 7 case variants each ----------------
-          const top5 = ranked.slice(0, 5);
+          // Character substitution for common OCR errors
+          function generateSubstitutions(text) {
+            const subs = [];
+            const chars = text.split('');
+            
+            // Common OCR confusions
+            const confusions = {
+              '0': ['O', '0'],
+              'O': ['0', 'O'],
+              '1': ['I', 'l', '1'],
+              'I': ['1', 'l', 'I'],
+              'l': ['1', 'I', 'l'],
+              '5': ['S', '5'],
+              'S': ['5', 'S'],
+              '8': ['B', '8'],
+              'B': ['8', 'B'],
+              '2': ['Z', '2'],
+              'Z': ['2', 'Z']
+            };
+            
+            // Generate up to 5 substitutions
+            for (let i = 0; i < chars.length && subs.length < 5; i++) {
+              if (confusions[chars[i]]) {
+                confusions[chars[i]].forEach(function(sub) {
+                  const variant = chars.slice(0, i).concat(sub, chars.slice(i + 1)).join('');
+                  if (variant !== text) subs.push(variant);
+                });
+              }
+            }
+            
+            return subs.slice(0, 5);
+          }
+
+          // -- Submit top-8 candidates with expanded case variants ----------------
+          const top8 = ranked.slice(0, 8);
           const triedVariants = {}; // dedup tracker
 
-          for (const entry of top5) {
+          for (const entry of top8) {
             if (captchaSolved) break;
             const orig = entry[1].best;
             
-            // Generate 7 case variants
+            // Generate expanded case variants with character substitutions
             const variants = [
               orig,                                                    // orig
               orig.toUpperCase(),                                      // UPPER
@@ -1167,7 +1313,11 @@ async function harvestQuota() {
               orig.charAt(0).toLowerCase() + orig.slice(1).toUpperCase(), // iNVERTED
               orig.split('').map(function(c, i) { return i % 2 === 0 ? c.toLowerCase() : c.toUpperCase(); }).join(''), // aLtErNaTe
               orig.split('').map(function(c, i) { return i % 2 === 0 ? c.toUpperCase() : c.toLowerCase(); }).join('')  // AlTeRnAtE
-            ];
+            ].concat(
+              generateSubstitutions(orig),
+              generateSubstitutions(orig.toUpperCase()),
+              generateSubstitutions(orig.toLowerCase())
+            ).filter(function(v, i, arr) { return arr.indexOf(v) === i; }); // dedupe
 
             for (let v = 0; v < variants.length; v++) {
               if (captchaSolved) break;
@@ -1175,8 +1325,9 @@ async function harvestQuota() {
               if (triedVariants[attempt]) continue; // skip duplicate
               triedVariants[attempt] = true;
 
-              const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn'];
-              console.log('    -> Trying [' + variantNames[v] + '] w=' + entry[1].weight + ':', attempt);
+              const variantNames = ['orig', 'UPPER', 'lower', 'Capital', 'iNVERT', 'aLtErN', 'AlTeRn', 'sub1', 'sub2', 'sub3'];
+              const vName = v < variantNames.length ? variantNames[v] : 'sub' + v;
+              console.log('    -> Trying [' + vName + '] w=' + entry[1].weight + ':', attempt);
               captchaSolved = await submitAnswer(attempt);
               if (captchaSolved) { console.log('  >>> CAPTCHA SOLVED round', round, '! <<<'); break; }
               console.log('    X Wrong "' + attempt + '"');
@@ -1201,960 +1352,30 @@ async function harvestQuota() {
       }
     }
 
-
     // ══════════════════════════════════════
-    console.log('STEP 2: SERVICE NUMBER (USERNAME)');
+    console.log('STEP 6: LOGIN SUCCESSFUL');
     // ══════════════════════════════════════
     console.log('  ✓ Login successful!\n');
 
-    // ══════════════════════════════════════════════════════════════════════════════
-    // SESSION VALIDATION - Verify session is truly valid before proceeding
-    // ══════════════════════════════════════════════════════════════════════════════
-    console.log('  [SESSION-CHECK] Validating login session...');
-    await sleep(3000); // Let session stabilize
-
-    // Test 1: Verify current URL is valid
-    const currentUrl = page.url();
-    if (currentUrl.includes('login')) {
-      console.log('  ✗ Still on login page after "success" - FALSE POSITIVE!');
-      throw new Error('Login false positive - still on login page');
-    }
-
-    // Test 2: Try navigating to account overview
-    try {
-      await page.goto('https://my.te.eg/echannel/#/accountoverview', { 
-        waitUntil: 'networkidle2', 
-        timeout: 10000 
-      });
-      await sleep(2000);
-      
-      const finalUrl = page.url();
-      if (finalUrl.includes('login')) {
-        console.log('  ✗ Session invalid - WE redirected back to login');
-        await clearCookies(); // Don't save invalid cookies
-        throw new Error('Session validation failed - redirected to login');
-      }
-      
-      console.log('  ✓ Session validated - URL:', finalUrl);
-    } catch(e) {
-      console.log('  ✗ Session validation error:', e.message);
-      throw new Error('Session validation failed: ' + e.message);
-    }
-
-    // Save session cookies for next run
+    // Save session cookies for next run (avoids login entirely if session still valid)
     try {
       const cookies = await page.cookies();
       const relevantCookies = cookies.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
-      if (relevantCookies.length > 0) await saveCookies(relevantCookies);
+      if (relevantCookies.length > 0) {
+        await saveCookies(relevantCookies);
+      }
     } catch(e) { console.log('  [SESSION] Could not save cookies:', e.message); }
 
     } // end if (!sessionValid)
 
-    // ── dismissAds: close any overlay/ad/popup before line switch ──────────
-    async function dismissAds() {
-      try {
-        const dismissed = await page.evaluate(() => {
-          let count = 0;
-          // Close buttons on overlays, modals, banners, promo popups
-          const selectors = [
-            '[class*="close"]', '[class*="dismiss"]', '[class*="modal"] button',
-            '[aria-label="Close"]', '[aria-label="close"]',
-            'button[class*="cancel"]', 'button[class*="Cancel"]',
-            '.ant-modal-close', '.ant-modal-close-x'
-          ];
-          for (const sel of selectors) {
-            for (const el of document.querySelectorAll(sel)) {
-              const r = el.getBoundingClientRect();
-              const visible = r.width > 0 && r.height > 0;
-              const isMainModal = el.closest('.ant-modal-content')?.querySelector('input');
-              if (visible && !isMainModal) {
-                el.click();
-                count++;
-              }
-            }
-          }
-          return count;
-        });
-        if (dismissed > 0) {
-          console.log('  [dismissAds] Closed', dismissed, 'overlay(s)');
-          await sleep(1500);
-        } else {
-          console.log('  [dismissAds] No ads/overlays found');
-        }
-      } catch(e) { console.log('  [dismissAds] Non-fatal:', e.message); }
-    }
-    await dismissAds();
-    // ────────────────────────────────────────────────────────────────────────
-
     // ══════════════════════════════════════
-    console.log('STEP 5.5: LINE SWITCHER (Dokki)');
-    // ══════════════════════════════════════
-    console.log('  Switching to line 0237600094...');
-
-    // FORCE NAVIGATION: WE sometimes redirects to wrong page after login.
-    // Explicitly navigate to accountoverview BEFORE attempting line switch.
-    const currentUrl = page.url();
-    if (!currentUrl.includes('accountoverview')) {
-      console.log('  [NAVIGATE] Current URL:', currentUrl);
-      console.log('  [NAVIGATE] Forcing navigation to accountoverview...');
-      await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-      await sleep(3000);
-      const newUrl = page.url();
-      console.log('  [NAVIGATE] New URL:', newUrl);
-      if (newUrl.includes('login')) {
-        throw new Error('WE forced redirect to login after navigation — possible session block');
-      }
-    }
-
-    // CRITICAL: The WE portal does a session refresh after line switch that can
-    // redirect back to #/login within seconds. The only reliable approach is to
-    // extract the data THE MOMENT we confirm the correct page is showing —
-    // before the redirect can happen. We capture data inside the switcher itself.
-
-    // Helper: extract all quota data from the current page state
-    async function extractNow() {
-      const result = await page.evaluate(() => {
-        const spans = Array.from(document.querySelectorAll('span, div, p'));
-        let remaining = null, used = null, balance = null, plan = null;
-        function isNumericText(t) {
-          if (!t) return false;
-          const s = t.replace(/,/g, '').trim();
-          return /^\d+(\.\d+)?$/.test(s) && !s.startsWith('0237') && !s.startsWith('023');
-        }
-        for (let i = 0; i < spans.length; i++) {
-          const t = spans[i].innerText?.trim();
-          if (!t || t.length > 100) continue;
-          if (t === 'Remaining') {
-            for (let b = 1; b <= 3; b++) {
-              const c = spans[i-b]?.innerText?.trim();
-              if (isNumericText(c)) { remaining = c; break; }
-            }
-          }
-          if (t === 'Used') {
-            for (let b = 1; b <= 3; b++) {
-              const c = spans[i-b]?.innerText?.trim();
-              if (isNumericText(c)) { used = c; break; }
-            }
-          }
-          if (t === 'Current Balance') {
-            for (let f = 1; f <= 5; f++) {
-              const c = spans[i+f]?.innerText?.trim();
-              if (isNumericText(c)) { balance = c; break; }
-            }
-          }
-          if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
-        }
-        if (!remaining) {
-          // Fallback: regex on full page text
-          const text = document.body.innerText;
-          const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
-          const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
-          const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i) || text.match(/([\d,]+\.?\d+)\s*EGP/i);
-          const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
-          if (!r) return null;
-          return { remaining: r[1], used: u?.[1]||'0', balance: b?.[1]||'0', plan: p?.[0]?.trim()||'Unknown' };
-        }
-        return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
-      });
-      if (!result) return null;
-      const parsed = {
-        remaining: stripNum(result.remaining),
-        used: stripNum(result.used) || 0,
-        balance: stripNum(result.balance) || 0,
-        plan: result.plan
-      };
-      return (parsed.remaining || parsed.remaining === 0) ? parsed : null;
-    }
-
-    // Helper: check page is showing correct line with actual data
-    // IMPORTANT: checks the ACTIVE line widget (top-left "You are currently managing")
-    // NOT just text.includes() which can false-positive from hidden dropdown options
-    async function checkPage094() {
-      return await page.evaluate(() => {
-        // Method 1: Check the active line widget specifically
-        // The "You are currently managing" shows the ACTIVE line number
-        const activeEl = document.querySelector(
-          '#accountOverview_currentNumber, .ant-select-selection-item, [class*="currentNumber"], [class*="current-number"]'
-        );
-        const activeText = activeEl ? activeEl.innerText?.trim() : '';
-
-        // Method 2: Check the small line number display near "You are currently managing"
-        const managingEls = Array.from(document.querySelectorAll('span, div'));
-        let managingLine = '';
-        for (let i = 0; i < managingEls.length; i++) {
-          const t = managingEls[i].innerText?.trim();
-          if (t && t.includes('currently managing')) {
-            // The line number is usually in a nearby sibling or child
-            const nearby = managingEls[i+1]?.innerText?.trim() || managingEls[i+2]?.innerText?.trim() || '';
-            if (nearby.includes('023760009')) { managingLine = nearby; break; }
-            // Also check children
-            const child = managingEls[i].querySelector('[class*="number"], [class*="select"]');
-            if (child) { managingLine = child.innerText?.trim(); break; }
-          }
-        }
-
-        // Method 3: Look for 0237600094 specifically in small/label elements (not huge containers)
-        let foundIn094Widget = false;
-        for (const el of document.querySelectorAll('span, a, button, label, .ant-select-selection-item')) {
-          const t = el.innerText?.trim();
-          if (t && t.includes('0237600094') && t.length < 20) {
-            foundIn094Widget = true;
-            break;
-          }
-        }
-
-        const rem = document.body.innerText.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i)?.[1] || '';
-        const bal = document.body.innerText.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i)?.[1]
-                 || document.body.innerText.match(/([\d,]+\.?\d+)\s*EGP/i)?.[1] || '0';
-        const balNum = parseFloat(bal.replace(/,/g, '')) || 0;
-
-        // Line 0237600094 has balance > 3000 EGP (line 0237600093 has ~1923 EGP)
-        const isCorrectByBalance = balNum > 3000;
-
-        const has094 = activeText.includes('0237600094') || managingLine.includes('0237600094') || foundIn094Widget || isCorrectByBalance;
-
-        return {
-          has094,
-          activeText,
-          managingLine,
-          foundIn094Widget,
-          isCorrectByBalance,
-          balNum,
-          rem,
-          hasRemaining: !!rem
-        };
-      }).catch(() => ({ has094: false, activeText: '', managingLine: '', foundIn094Widget: false, isCorrectByBalance: false, balNum: 0, rem: '', hasRemaining: false }));
-    }
-
-    // The captured data from inside the switcher (avoids race condition)
-    let switcherCapturedData = null;
-
-    await tryMethods([
-      // M1: Click dropdown → select 0237600094 → capture data immediately on confirmation
-      async () => {
-        await page.waitForFunction(() => {
-          const t = document.body.innerText;
-          return t.includes('currently managing') || t.includes('Remaining');
-        }, { timeout: 15000 });
-        await sleep(1500);
-        console.log('    Pre-switch URL:', page.url());
-
-        // Open the line switcher dropdown
-        const dropdowns = await page.$$('.ant-select-selector, .ant-select');
-        if (!dropdowns.length) throw new Error('Dropdown not found');
-        await dropdowns[0].click();
-        await sleep(800);
-        // DISMISS ANY POPUPS AFTER DROPDOWN CLICK
-        console.log('    [POST-DROPDOWN] Dismissing popups...');
-        await dismissAds();
-        await sleep(700);
-
-        // Click 0237600094
-        const clicked = await page.evaluate(() => {
-          const opts = Array.from(document.querySelectorAll(
-            '.ant-select-item-option-content, .ant-select-item, li, option'
-          ));
-          const t = opts.find(o => o.textContent && o.textContent.includes('0237600094'));
-          if (t) { t.click(); return t.textContent.trim(); }
-          return null;
-        });
-        if (!clicked) throw new Error('Option 0237600094 not found');
-        console.log('    Clicked:', clicked);
-
-        // Poll aggressively — capture data THE MOMENT the page shows 0237600094 AND full data loaded
-        for (let w = 0; w < 30; w++) {
-          await sleep(1000);
-          const url = page.url();
-          const check = await checkPage094();
-
-          // If stuck on login after 5s, fail this method
-          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login after line switch');
-
-          // CRITICAL: Must satisfy ALL conditions for valid capture:
-          // 1. check.hasRemaining = true (data visible)
-          // 2. check.has094 = true (correct line showing)
-          // 3. balance > 3000 (line 94 has ~9856 EGP, line 93 has ~1923 EGP)
-          // 4. balance > 0 (data fully loaded, not still loading)
-          // 5. plan !== 'Unknown' (full page rendered)
-          // 6. remaining + used > 300 GB (line 94 = 750GB plan, line 93 = 250GB plan)
-          //    This catches mixed-state where balance updated but remaining/used still from line 93
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                switcherCapturedData = captured;
-                console.log('    ✓ M1 FULL DATA CAPTURED: remaining=' + captured.remaining + ' used=' + captured.used + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance + ' plan=' + captured.plan);
-                return; // SUCCESS
-              } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093), waiting for 094...');
-              } else if (captured.balance === 0) {
-                console.log('    ⏳ (' + (w+1) + 's) Balance=0, page still loading... rem=' + captured.remaining);
-              } else if (captured.plan === 'Unknown') {
-                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, page still rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
-              } else if (totalGB <= 300) {
-                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + ' (094✓) but rem+used=' + totalGB.toFixed(1) + 'GB (093 plan=250GB!) — waiting for full 094 data...');
-              } else {
-                console.log('    ⏳ (' + (w+1) + 's) Data incomplete, waiting... rem=' + captured.remaining + ' bal=' + captured.balance + ' total=' + totalGB.toFixed(1));
-              }
-            } else {
-              console.log('    ⏳ (' + (w+1) + 's) extractNow returned null, waiting...');
-            }
-          } else {
-            console.log('    ⏳ (' + (w+1) + 's) URL:' + url.split('#')[1] + ' | has094:' + check.has094 + ' | hasRem:' + check.hasRemaining + ' | bal:' + check.balNum);
-          }
-        }
-        throw new Error('M1: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 30s');
-      },
-
-      // M2: Broad evaluate click → same capture strategy
-      async () => {
-        await sleep(2000);
-        // Try all possible selectors for the dropdown
-        await page.evaluate(() => {
-          // Try ant-select first
-          const sel = document.querySelector('.ant-select-selector, .ant-select');
-          if (sel) sel.click();
-        });
-        await sleep(1500);
-        // Click target line
-        await page.evaluate(() => {
-          for (const el of document.querySelectorAll('div, li, option, span, a, .ant-select-item')) {
-            if (el.textContent && el.textContent.trim().includes('0237600094')) { el.click(); return; }
-          }
-        });
-        console.log('    Broad click done, waiting for page...');
-
-        // Same aggressive capture strategy with ALL verification criteria
-        for (let w = 0; w < 25; w++) {
-          await sleep(1000);
-          const url = page.url();
-          const check = await checkPage094();
-
-          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login');
-
-          // ALL 6 conditions must be true for valid capture
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                switcherCapturedData = captured;
-                console.log('    ✓ M2 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
-                return;
-              } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
-              } else if (captured.balance === 0) {
-                console.log('    ⏳ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
-              } else if (captured.plan === 'Unknown') {
-                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
-              } else if (totalGB <= 300) {
-                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '✓ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
-              }
-            }
-          } else {
-            console.log('    ⏳ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
-          }
-        }
-        throw new Error('M2: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
-      },
-
-      // M3: page.select() + capture
-      async () => {
-        await sleep(2000);
-        await page.select('select', '0237600094').catch(() => {});
-        for (let w = 0; w < 25; w++) {
-          await sleep(1000);
-          const url = page.url();
-          const check = await checkPage094();
-
-          if (url.includes('#/login') && w > 5) throw new Error('Redirected to login');
-
-          // ALL 6 conditions must be true for valid capture
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                switcherCapturedData = captured;
-                console.log('    ✓ M3 FULL DATA CAPTURED: remaining=' + captured.remaining + ' total=' + totalGB.toFixed(1) + 'GB balance=' + captured.balance);
-                return;
-              } else if (captured.balance > 0 && captured.balance < 3000) {
-                console.log('    ⚠ (' + (w+1) + 's) Balance ' + captured.balance + ' < 3000 — WRONG LINE (093)');
-              } else if (captured.balance === 0) {
-                console.log('    ⏳ (' + (w+1) + 's) Balance=0, loading... rem=' + captured.remaining);
-              } else if (captured.plan === 'Unknown') {
-                console.log('    ⏳ (' + (w+1) + 's) Plan=Unknown, rendering... rem=' + captured.remaining + ' bal=' + captured.balance);
-              } else if (totalGB <= 300) {
-                console.log('    ⚠ (' + (w+1) + 's) MIXED STATE: balance=' + captured.balance + '✓ but total=' + totalGB.toFixed(1) + 'GB = 093 plan, waiting...');
-              }
-            }
-          } else {
-            console.log('    ⏳ (' + (w+1) + 's) rem:' + check.rem + ' | has094:' + check.has094 + ' | bal:' + check.balNum);
-          }
-        }
-        throw new Error('M3: Page did not show line 94 FULL data (balance>3000, totalGB>300, plan loaded) in 25s');
-      }
-    ], 'LINE SWITCHER', 45000);
-
-    console.log('  ✓ Switched to 0237600094 | captured data:', switcherCapturedData ? 'YES' : 'NO');
-    console.log('  Current URL:', page.url(), '\n');
-
-    // ══════════════════════════════════════
-    console.log('STEP 6: EXTRACT');
+    // TODO: DOKKI POST-LOGIN CODE GOES HERE
+    // Line switcher to 0237600094
+    // Extraction for Dokki line
+    // Firestore/Telegram for Dokki
     // ══════════════════════════════════════
 
-    // Use pre-captured data from switcher if available (avoids race condition with redirect)
-    // Only fall through to live extraction if switcher didn't capture data
-    const data = switcherCapturedData ? await (async () => {
-      console.log('  [FAST PATH] Using data captured during line switch (race-condition safe)');
-      console.log('    M1 numeric-only sibling scan');
-      return switcherCapturedData;
-    })() : await tryMethods([
-      // M1: Walk ALL spans/divs — numeric sibling scan
-      async () => {
-        await sleep(2000);
-        const result = await page.evaluate(() => {
-          const spans = Array.from(document.querySelectorAll('span, div, p'));
-          let remaining = null, used = null, balance = null, plan = null;
-          function isNumericText(t) {
-            if (!t) return false;
-            const s = t.replace(/,/g, '').trim();
-            return /^\d+(\.\d+)?$/.test(s) && !s.startsWith('0237') && !s.startsWith('023');
-          }
-          for (let i = 0; i < spans.length; i++) {
-            const t = spans[i].innerText?.trim();
-            if (!t || t.length > 100) continue;
-            if (t === 'Remaining') { for (let b=1;b<=3;b++) { const c=spans[i-b]?.innerText?.trim(); if(isNumericText(c)){remaining=c;break;} } }
-            if (t === 'Used')      { for (let b=1;b<=3;b++) { const c=spans[i-b]?.innerText?.trim(); if(isNumericText(c)){used=c;break;} } }
-            if (t === 'Current Balance') { for (let f=1;f<=5;f++) { const c=spans[i+f]?.innerText?.trim(); if(isNumericText(c)){balance=c;break;} } }
-            if (t.includes('GB') && t.toLowerCase().includes('speed')) plan = t;
-          }
-          if (!remaining) throw new Error('no remaining found');
-          return { remaining, used: used||'0', balance: balance||'0', plan: plan||'Unknown' };
-        });
-        const parsed = { remaining: stripNum(result.remaining), used: stripNum(result.used)||0, balance: stripNum(result.balance)||0, plan: result.plan };
-        if (!parsed.remaining && parsed.remaining !== 0) throw new Error('no data after stripNum');
-        console.log('    M1 numeric-only sibling scan');
-        return parsed;
-      },
-      // M2: Full page text regex
-      async () => {
-        await sleep(5000);
-        const result = await page.evaluate(() => {
-          const text = document.body.innerText;
-          const r = text.match(/([\d,]+\.?\d+)\s*\n?\s*Remaining/i);
-          const u = text.match(/([\d,]+\.?\d+)\s*\n?\s*Used/i);
-          const b = text.match(/Current Balance\s*\n?\s*([\d,]+\.?\d+)/i) || text.match(/([\d,]+\.?\d+)\s*EGP/i);
-          const p = text.match(/[^\n]*\d+\s*GB[^\n]*[Ss]peed[^\n]*/);
-          if (!r) throw new Error('no remaining in page text');
-          return { remaining: r[1], used: u?.[1]||'0', balance: b?.[1]||'0', plan: p?.[0]?.trim()||'Unknown' };
-        });
-        const parsed = { remaining: stripNum(result.remaining), used: stripNum(result.used)||0, balance: stripNum(result.balance)||0, plan: result.plan };
-        if (!parsed.remaining) throw new Error('no data M2');
-        console.log('    M2 page text regex');
-        return parsed;
-      },
-      // M3: HTML source regex fallback
-      async () => {
-        await sleep(8000);
-        const html = await withTimeout(page.content(), 8000, 'page.content');
-        const r = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Remaining/i);
-        const u = html.match(/>([\d,]+\.?\d+)<[^>]*>\s*(?:<[^>]*>)*\s*Used/i);
-        const b = html.match(/>([\d,]+\.?\d+)\s*EGP</i);
-        if (!r) throw new Error('no data in html');
-        return { remaining: stripNum(r[1]), used: stripNum(u?.[1])||0, balance: stripNum(b?.[1])||0, plan: 'Unknown' };
-      }
-    ], 'EXTRACT', 30000);
-
-    console.log('  Remaining:', data.remaining, 'GB');
-    console.log('  Used:', data.used, 'GB');
-    console.log('  Balance:', data.balance, 'EGP');
-    console.log('  Plan:', data.plan, '\n');
-
-    // ══════════════════════════════════════
-    console.log('STEP 7: FIRESTORE');
-    // ══════════════════════════════════════
-    const now = new Date().toISOString();
-    const fields = {
-      'dokki': { mapValue: { fields: {
-        quota:    { doubleValue: data.remaining },
-        maxQuota: { doubleValue: data.remaining + data.used },
-        balance:  { doubleValue: data.balance },
-        used:     { doubleValue: data.used },
-        plan:     { stringValue: data.plan },
-        updatedAt: { stringValue: now },
-        updatedBy: { stringValue: 'GitHub Cloud ⚡ Dokki' },
-        status:   { stringValue: 'success' }
-      }}},
-      lastUpdate: { stringValue: now }
-    };
-
-    await tryMethods([
-      async () => {
-        const mask = 'updateMask.fieldPaths=dokki&updateMask.fieldPaths=lastUpdate';
-        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_latest/current?key=${FIREBASE_API_KEY}&${mask}`;
-        const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        console.log('    updateMask PATCH (Dokki field)');
-      },
-      async () => {
-        await sleep(2000);
-        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_latest/current?key=${FIREBASE_API_KEY}`;
-        const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        console.log('    standard PATCH');
-      },
-      async () => {
-        await sleep(3000);
-        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_latest/current?key=${FIREBASE_API_KEY}`;
-        const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        console.log('    retry PATCH');
-      }
-    ], 'FIRESTORE', 20000);
-
-    console.log('  ✓ Uploaded to quota_latest!\n');
-
-    // ══════════════════════════════════════
-    console.log('STEP 8: LEDGER (quota_history)');
-    // ══════════════════════════════════════
-    const historyFields = {
-      timestamp: { stringValue: now },
-      user: { stringValue: 'GitHub Cloud ⚡ Dokki' },
-      notes: { stringValue: '' },
-      dokki: { mapValue: { fields: {
-        quota: { doubleValue: data.remaining },
-        balance: { doubleValue: data.balance }
-      }}},
-      '104': { mapValue: { fields: {
-        quota: { nullValue: null },
-        balance: { nullValue: null }
-      }}},
-      gezira: { mapValue: { fields: {
-        quota: { nullValue: null },
-        balance: { nullValue: null }
-      }}}
-    };
-
-    await tryMethods([
-      async () => {
-        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_history?key=${FIREBASE_API_KEY}`;
-        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: historyFields }) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        console.log('    POST to quota_history');
-      },
-      async () => {
-        await sleep(2000);
-        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_history?key=${FIREBASE_API_KEY}`;
-        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: historyFields }) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        console.log('    retry POST to quota_history');
-      }
-    ], 'LEDGER', 20000);
-
-    console.log('  ✓ Ledger updated!\n');
-
-    // ══════════════════════════════════════
-    console.log('STEP 8.5: LOW QUOTA FLAG');
-    // ══════════════════════════════════════
-    // Write flag to Firestore quota_settings/alerts
-    // dokki_low: true  → hourly workflow will run full harvest
-    // dokki_low: false → hourly workflow will skip (normal 2h schedule handles it)
-    try {
-      const isLowDokki = data.remaining < 100;
-      const alertFields = {
-        dokki_low:       { booleanValue: isLowDokki },
-        dokki_quota:     { doubleValue: data.remaining },
-        dokki_updatedAt: { stringValue: now }
-      };
-      const alertMask = 'updateMask.fieldPaths=dokki_low&updateMask.fieldPaths=dokki_quota&updateMask.fieldPaths=dokki_updatedAt';
-      const alertUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/alerts?key=${FIREBASE_API_KEY}&${alertMask}`;
-      const alertRes = await fetch(alertUrl, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: alertFields })
-      });
-      if (alertRes.ok) {
-        console.log('  ✓ Low quota flag set: dokki_low=' + isLowDokki + ' (' + data.remaining.toFixed(1) + ' GB)\n');
-      } else {
-        console.log('  ⚠ Flag write failed (non-critical): HTTP ' + alertRes.status);
-      }
-    } catch(e) {
-      console.log('  ⚠ Flag write error (non-critical):', e.message);
-    }
-
-    // ══════════════════════════════════════
-    console.log('STEP 9: TELEGRAM');
-    // ══════════════════════════════════════
-    try {
-      const date = new Date().toLocaleString('en-GB', {
-        timeZone: 'Africa/Cairo',
-        day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-      });
-
-      // Quota alert level
-      const rem = data.remaining;
-      let alertLine = '';
-      if (rem < 30)       alertLine = '\n🚨 *CRITICAL — Under 30 GB! Recharge immediately!*';
-      else if (rem < 50)  alertLine = '\n🔴 *CRITICAL — Under 50 GB!*';
-      else if (rem < 100) alertLine = '\n🟠 *WARNING — Under 100 GB*';
-
-      // Status icon based on level
-      const statusIcon = rem < 50 ? '🔴' : rem < 100 ? '🟠' : '✅';
-
-      const msg = [
-        '📡 *Cairo Taj — Dokki Harvest*',
-        '',
-        `${statusIcon} Quota Remaining: *${rem.toFixed(2)} GB*`,
-        `📉 Used: *${data.used.toFixed(2)} GB*`,
-        `💰 Balance: *${data.balance.toFixed(2)} EGP*`,
-        `📋 Plan: ${data.plan}`,
-        `🕐 ${date}`,
-        `🤖 GitHub Cloud ⚡ Dokki` + alertLine
-      ].join('\n');
-
-      const tgUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-
-      // Send main harvest message to personal chat AND group (if configured)
-      const recipients = [TELEGRAM_CHAT_ID];
-      if (TELEGRAM_GROUP_ID) recipients.push(TELEGRAM_GROUP_ID);
-
-      let tgSuccess = false;
-      for (const chatId of recipients) {
-        if (!chatId) continue;
-        const tgRes = await fetch(tgUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' })
-        });
-        if (tgRes.ok) { tgSuccess = true; }
-        else { console.log('  ⚠ Telegram to ' + chatId + ': HTTP ' + tgRes.status); }
-      }
-      if (!tgSuccess) throw new Error('All Telegram sends failed');
-      console.log('  ✓ Telegram sent!\n');
-
-      // CRITICAL ALERT: Under 30 GB — send a separate urgent message
-      if (rem < 30) {
-        const criticalMsg = {
-          text: ['🚨🚨🚨 *CRITICAL QUOTA ALERT* 🚨🚨🚨', '', '⚠️ *Cairo Taj — Dokki*',
-            `📉 Only *${rem.toFixed(2)} GB* remaining!`, '🔴 *ACTION REQUIRED: Recharge immediately!*', '', `🕐 ${date}`].join('\n'),
-          parse_mode: 'Markdown',
-          disable_notification: false
-        };
-        for (const chatId of recipients) {
-          if (!chatId) continue;
-          await fetch(tgUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...criticalMsg, chat_id: chatId }) });
-        }
-        console.log('  🚨 Critical alert sent!\n');
-      }
-
-    } catch (e) {
-      // Telegram failure should NOT fail the whole harvest
-      console.log('  ⚠ Telegram failed (non-critical):', e.message);
-    }
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('✅ ✅ ✅  SUCCESS  ✅ ✅ ✅');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-    // ══════════════════════════════════════════════════════════════
-    // VIGILANCE MODE — triggered when quota ≤ 50 GB (Dokki)
-    // Stays in same session, refreshes every 13 minutes, harvests
-    // until quota ≤ 2 GB or session dies (then restarts + re-switches line).
-    // Only sends Telegram for Dokki — other line unaffected.
-    // ══════════════════════════════════════════════════════════════
-    if (data.remaining <= 50) {
-      console.log('\n🔴 VIGILANCE MODE ACTIVATED (DOKKI) — quota=' + data.remaining.toFixed(2) + ' GB ≤ 50 GB');
-      console.log('  Will harvest every 13 min until quota ≤ 2 GB or job time limit reached.\n');
-
-      const VIGILANCE_INTERVAL_MS = 13 * 60 * 1000;
-      const VIGILANCE_MAX_MS      = 5 * 60 * 60 * 1000 + 45 * 60 * 1000;
-      const VIGILANCE_STOP_GB     = 2;
-      const vigilanceStart        = Date.now();
-      let   vigilanceRound        = 0;
-      let   lastRemaining         = data.remaining;
-
-      // ── Helper: refresh to account overview and re-switch to line 094 ──
-      async function vigilanceRefreshPage() {
-        await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 30000 });
-        await sleep(3000);
-        if (page.url().includes('#/login')) throw new Error('SESSION_DIED: redirected to login');
-        // Re-switch to line 094 (same logic as Step 5.5)
-        await page.waitForFunction(() => {
-          const t = document.body.innerText;
-          return t.includes('currently managing') || t.includes('Remaining');
-        }, { timeout: 15000 }).catch(() => {});
-        await sleep(1500);
-        const dropdowns = await page.$$('.ant-select-selector, .ant-select');
-        if (dropdowns.length) {
-          await dropdowns[0].click();
-          await sleep(800);
-        // DISMISS ANY POPUPS AFTER DROPDOWN CLICK
-        console.log('    [POST-DROPDOWN] Dismissing popups...');
-        await dismissAds();
-        await sleep(700);
-          await page.evaluate(() => {
-            const opts = Array.from(document.querySelectorAll('.ant-select-item-option-content, .ant-select-item, li, option'));
-            const t = opts.find(o => o.textContent && o.textContent.includes('0237600094'));
-            if (t) t.click();
-          });
-        }
-        // Wait for full 094 data (same 6-condition gate)
-        for (let w = 0; w < 30; w++) {
-          await sleep(1000);
-          if (page.url().includes('#/login') && w > 5) throw new Error('SESSION_DIED: redirected to login after line switch');
-          const check = await checkPage094();
-          if (check.hasRemaining && check.has094) {
-            const captured = await extractNow();
-            if (captured) {
-              const totalGB = (captured.remaining || 0) + (captured.used || 0);
-              if (captured.balance > 3000 && captured.balance > 0 && captured.plan !== 'Unknown' && totalGB > 300) {
-                console.log('  ✓ [VIGILANCE] Line 094 confirmed: rem=' + captured.remaining + ' bal=' + captured.balance);
-                return captured;
-              }
-            }
-          }
-        }
-        throw new Error('Line 094 data not confirmed after 30s');
-      }
-
-      // ── Helper: write to Firestore (Dokki only) ──
-      async function vigilanceFirestore(vData) {
-        const vNow = new Date().toISOString();
-        const vFields = {
-          'dokki': { mapValue: { fields: {
-            quota:     { doubleValue: vData.remaining },
-            maxQuota:  { doubleValue: vData.remaining + vData.used },
-            balance:   { doubleValue: vData.balance },
-            used:      { doubleValue: vData.used },
-            plan:      { stringValue: vData.plan },
-            updatedAt: { stringValue: vNow },
-            updatedBy: { stringValue: 'GitHub Cloud ⚡ Dokki [VIGILANCE]' },
-            status:    { stringValue: 'success' }
-          }}},
-          lastUpdate: { stringValue: vNow }
-        };
-        const mask = 'updateMask.fieldPaths=dokki&updateMask.fieldPaths=lastUpdate';
-        const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_latest/current?key=${FIREBASE_API_KEY}&${mask}`;
-        const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: vFields }) });
-        if (!res.ok) throw new Error('Firestore HTTP ' + res.status);
-        const vHistory = {
-          timestamp: { stringValue: vNow },
-          user: { stringValue: 'GitHub Cloud ⚡ Dokki [VIGILANCE]' },
-          notes: { stringValue: 'vigilance-mode' },
-          dokki: { mapValue: { fields: { quota: { doubleValue: vData.remaining }, balance: { doubleValue: vData.balance } } } },
-          '104': { mapValue: { fields: { quota: { nullValue: null }, balance: { nullValue: null } } } },
-          gezira: { mapValue: { fields: { quota: { nullValue: null }, balance: { nullValue: null } } } }
-        };
-        const hUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_history?key=${FIREBASE_API_KEY}`;
-        await fetch(hUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: vHistory }) });
-      }
-
-      // ── Helper: send Vigilance Telegram (Dokki only) ──
-      async function vigilanceTelegram(vData, vRound, elapsed) {
-        try {
-          const rem = vData.remaining;
-          const elapsedMin = Math.floor(elapsed / 60000);
-          const burned = lastRemaining - rem;
-          const burnRate = burned > 0 ? (burned / (elapsedMin / 60)).toFixed(2) : '0.00';
-          const hoursLeft = parseFloat(burnRate) > 0 ? (rem / parseFloat(burnRate)).toFixed(1) : '∞';
-          const date = new Date().toLocaleString('en-GB', {
-            timeZone: 'Africa/Cairo', day: '2-digit', month: 'short',
-            year: 'numeric', hour: '2-digit', minute: '2-digit'
-          });
-          const icon = rem <= 2 ? '🚨' : rem <= 10 ? '🔴' : rem <= 20 ? '🟠' : '🟡';
-          const urgency = rem <= 2  ? '🚨 *STOP — 2 GB REACHED! Recharge NOW!*' :
-                          rem <= 5  ? '🔴 *CRITICAL — Under 5 GB!*' :
-                          rem <= 10 ? '🔴 *CRITICAL — Under 10 GB! Recharge soon!*' :
-                          rem <= 20 ? '🟠 *WARNING — Under 20 GB*' :
-                          rem <= 30 ? '🟡 *NOTICE — Under 30 GB*' : '';
-          const msg = [
-            '⚡ *Cairo Taj — Dokki [VIGILANCE MODE]*',
-            '',
-            icon + ' Quota: *' + rem.toFixed(2) + ' GB* remaining',
-            '📉 Used: *' + vData.used.toFixed(2) + ' GB*',
-            '💰 Balance: *' + vData.balance.toFixed(2) + ' EGP*',
-            '🔥 Burn rate: ~' + burnRate + ' GB/h',
-            '⏱ Est. time left: ~' + hoursLeft + 'h',
-            '🔄 Vigilance round: #' + vRound + ' (' + elapsedMin + 'min in)',
-            '🕐 ' + date,
-            urgency
-          ].filter(Boolean).join('\n');
-          const tgUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-          const recipients = [TELEGRAM_CHAT_ID];
-          if (TELEGRAM_GROUP_ID) recipients.push(TELEGRAM_GROUP_ID);
-          for (const chatId of recipients) {
-            if (!chatId) continue;
-            await fetch(tgUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }) });
-          }
-          if (rem <= 10) {
-            const critMsg = {
-              text: ['🚨🚨🚨 *VIGILANCE CRITICAL* 🚨🚨🚨', '', '⚠️ *Cairo Taj — Dokki*',
-                '📉 Only *' + rem.toFixed(2) + ' GB* remaining!',
-                '🔴 *ACTION REQUIRED: Recharge immediately!*', '', '🕐 ' + date].join('\n'),
-              parse_mode: 'Markdown', disable_notification: false
-            };
-            for (const chatId of recipients) {
-              if (!chatId) continue;
-              await fetch(tgUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...critMsg, chat_id: chatId }) });
-            }
-          }
-          console.log('  ✓ Vigilance Telegram sent (round #' + vRound + ')');
-        } catch(e) { console.log('  ⚠ Vigilance Telegram failed (non-critical):', e.message); }
-      }
-
-      // ── Helper: full re-login + re-switch to 094 when session dies ──
-      async function vigilanceRestartSession() {
-        console.log('  [VIGILANCE] Session died — restarting fresh session...');
-        try { await browser.close(); } catch(e) {}
-        browser = await puppeteer.launch({
-          headless: true, executablePath: '/usr/bin/google-chrome-stable',
-          protocolTimeout: 60000,
-          args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-                 '--disable-blink-features=AutomationControlled',
-                 '--disable-features=IsolateOrigins,site-per-process','--window-size=1366,768'],
-          ignoreDefaultArgs: ['--enable-automation']
-        });
-        page = await browser.newPage();
-        await page.evaluateOnNewDocument(() => {
-          window.alert = () => {}; window.confirm = () => true; window.prompt = () => '';
-          Object.defineProperty(window, 'console', { writable: false, configurable: false });
-          Object.defineProperty(navigator, 'webdriver', { get: () => false });
-          window.navigator.chrome = { runtime: {} };
-          Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-          Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
-        });
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        await page.setViewport({ width: 1366, height: 768 });
-        page.on('dialog', async dialog => { await dialog.accept(); });
-        // Try saved cookies first
-        const sc = await loadSavedCookies();
-        if (sc && sc.length > 0) {
-          await page.setCookie(...sc);
-          await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
-          await sleep(3000);
-          if (!page.url().includes('login')) {
-            console.log('  [VIGILANCE] Session restored from cookies ✓');
-            return;
-          }
-          await clearCookies();
-        }
-        // Full fresh login
-        await tryMethods([
-          async () => {
-            await page.goto('https://my.te.eg/echannel/', { waitUntil: 'networkidle2', timeout: 30000 });
-            await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 15000 });
-          },
-          async () => {
-            await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 40000 });
-            await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 20000 });
-          }
-        ], 'VIGILANCE RE-NAVIGATE', 55000);
-        await sleep(randomDelay(3000, 5000));
-        await page.focus('#login_loginid_input_01').catch(() => {});
-        await sleep(2000);
-        await page.type('#login_loginid_input_01', WE_USERNAME, { delay: randomDelay(100, 180) });
-        await sleep(randomDelay(4000, 6000));
-        await page.waitForFunction(() => !!document.querySelector('.ant-select-selector, .ant-select'), { timeout: 12000 }).catch(() => {});
-        await sleep(500);
-        const dd = await page.$('.ant-select-selector, .ant-select');
-        if (dd) { await dd.click(); await sleep(1500); }
-        await page.evaluate(() => {
-          for (const el of document.querySelectorAll('.ant-select-item-option, li')) {
-            if (el.textContent?.toLowerCase().includes('internet')) { el.click(); return; }
-          }
-        });
-        await sleep(randomDelay(4000, 6000));
-        await page.focus('#login_password_input_01').catch(() => {});
-        await sleep(2000);
-        await page.type('#login_password_input_01', WE_PASSWORD, { delay: randomDelay(100, 180) });
-        await sleep(randomDelay(4000, 6000));
-        await page.evaluate(() => {
-          const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('login') || b.className.includes('primary'));
-          if (btn) btn.click();
-        });
-        for (let t = 0; t < 20; t++) {
-          await sleep(1000);
-          if (!page.url().includes('login')) break;
-        }
-        if (page.url().includes('login')) throw new Error('Re-login failed after session death');
-        console.log('  [VIGILANCE] Fresh login successful ✓');
-        try {
-          const nc = await page.cookies();
-          const rel = nc.filter(c => c.domain.includes('te.eg') || c.domain.includes('telecomegypt'));
-          if (rel.length > 0) await saveCookies(rel);
-        } catch(e) {}
-      }
-
-      // ══ MAIN VIGILANCE LOOP (Dokki) ══
-      while (true) {
-        const elapsed = Date.now() - vigilanceStart;
-        if (elapsed >= VIGILANCE_MAX_MS) {
-          console.log('\n[VIGILANCE] 5h 45m safety cap reached — stopping vigilance mode.');
-          break;
-        }
-        console.log('\n[VIGILANCE] Waiting 13 minutes for next harvest...');
-        await sleep(VIGILANCE_INTERVAL_MS);
-
-        vigilanceRound++;
-        const elapsedMin = Math.floor((Date.now() - vigilanceStart) / 60000);
-        console.log('\n' + '═'.repeat(50));
-        console.log('⚡ VIGILANCE ROUND #' + vigilanceRound + ' — DOKKI (' + elapsedMin + 'min elapsed)');
-        console.log('═'.repeat(50));
-
-        try {
-          // Refresh page + re-switch to 094 (returns confirmed vData directly)
-          const vData = await vigilanceRefreshPage();
-          console.log('  Remaining: ' + vData.remaining + ' GB | Used: ' + vData.used + ' GB | Balance: ' + vData.balance + ' EGP');
-
-          await vigilanceFirestore(vData);
-          console.log('  ✓ Firestore + Ledger updated');
-
-          try {
-            const vNow = new Date().toISOString();
-            const isLowDokki = vData.remaining < 100;
-            const alertFields = {
-              dokki_low: { booleanValue: isLowDokki },
-              dokki_quota: { doubleValue: vData.remaining },
-              dokki_updatedAt: { stringValue: vNow }
-            };
-            const alertMask = 'updateMask.fieldPaths=dokki_low&updateMask.fieldPaths=dokki_quota&updateMask.fieldPaths=dokki_updatedAt';
-            const alertUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/quota_settings/alerts?key=${FIREBASE_API_KEY}&${alertMask}`;
-            await fetch(alertUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fields: alertFields }) });
-          } catch(e) { console.log('  ⚠ Flag update failed (non-critical):', e.message); }
-
-          await vigilanceTelegram(vData, vigilanceRound, Date.now() - vigilanceStart);
-          lastRemaining = vData.remaining;
-
-          if (vData.remaining <= VIGILANCE_STOP_GB) {
-            console.log('\n🚨 [VIGILANCE] Quota reached ' + vData.remaining.toFixed(2) + ' GB — STOP THRESHOLD HIT.');
-            console.log('  Vigilance mode complete. Awaiting manual recharge.');
-            break;
-          }
-
-        } catch (vErr) {
-          console.log('  [VIGILANCE] Round #' + vigilanceRound + ' error: ' + vErr.message);
-          if (vErr.message.includes('SESSION_DIED') || vErr.message.includes('redirected to login') || vErr.message.includes('ALL METHODS FAILED')) {
-            console.log('  [VIGILANCE] Session dead — attempting restart...');
-            try {
-              await vigilanceRestartSession();
-              console.log('  [VIGILANCE] Session restarted. Will retry on next round.');
-            } catch (restartErr) {
-              console.log('  [VIGILANCE] Restart failed: ' + restartErr.message + ' — stopping vigilance.');
-              break;
-            }
-          } else {
-            console.log('  [VIGILANCE] Non-fatal error, continuing...');
-          }
-        }
-      }
-
-      console.log('\n[VIGILANCE] Exiting vigilance mode after ' + vigilanceRound + ' rounds (Dokki).');
-    } // end vigilance mode
+    console.log('\n✅ DOKKI HARVEST COMPLETE (LOGIN ONLY - POST-LOGIN TODO)');
 
   } catch (error) {
     console.error('\n❌ ERROR:', error.message);
@@ -2185,8 +1406,9 @@ async function main() {
       process.exit(0);
     } catch (error) {
       console.error(`\nAttempt ${attempt} failed: ${error.message}`);
+      // If WE blocked us, don't retry — it will make things worse
       if (error.message && error.message.includes('WE_BLOCKED')) {
-        console.error('⛔ WE block detected — stopping all retries to avoid extending the block');
+        console.error('⛔ WE block detected — stopping all retries to avoid extending the block period');
         console.error('💀 Will retry on next scheduled run automatically');
         process.exit(1);
       }
