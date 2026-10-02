@@ -146,70 +146,70 @@ async function harvestQuota() {
     console.log('  [STEALTH] Real browser UA:', stealthUA.slice(0, 80) + '...');
 
     await page.evaluateOnNewDocument((ua) => {
-      // ══════════════════════════════════════════════════════════════════════════════
-      // MINIMAL CDP BLOCKER — Prevent "Prohibit use of console" without breaking page
-      // ══════════════════════════════════════════════════════════════════════════════
-      
-      // 1. Kill dialog methods
+      // ── Stealth injection: Hide CDP markers and automation detection ──
       window.alert   = () => {};
       window.confirm = () => true;
       window.prompt  = () => '';
-      
-      // 2. Delete CDP markers (but DON'T freeze console - that breaks React apps!)
-      try {
-        delete console._commandLineAPI;
-        delete window.__playwright;
-        delete window.__puppeteer;
-        delete window.__selenium;
-        delete window.__webdriver;
-        delete window.__driver;
-        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
-        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-      } catch(e) {}
-      
-      // 3. Lightweight console Proxy - hide _commandLineAPI without breaking functionality
-      const _origConsole = window.console;
-      window.console = new Proxy(_origConsole, {
-        get(target, prop) {
-          if (prop === '_commandLineAPI') return undefined;  // Hide CDP marker
-          return target[prop];  // Allow everything else through
-        }
-      });
 
-      // Fix outerWidth/outerHeight — headless = 0 which WE detects
+      // Hide CDP marker via lightweight Proxy
+      const _realConsole = console;
+      const _fakeConsole = new Proxy(_realConsole, {
+        get(target, prop) {
+          if (prop === '_commandLineAPI') return undefined; // CDP marker
+          if (prop === 'constructor') return Object;
+          const val = target[prop];
+          if (typeof val === 'function') {
+            return new Proxy(val, {
+              apply(fn, ctx, args) { try { return Reflect.apply(fn, ctx, args); } catch(e) {} },
+              get(fn, p) {
+                if (p === 'toString') return () => `function ${fn.name || p}() { [native code] }`;
+                return fn[p];
+              }
+            });
+          }
+          return val;
+        },
+        set() { return true; }
+      });
+      try {
+        Object.defineProperty(window, 'console', {
+          get: () => _fakeConsole,
+          set: () => {},
+          configurable: false,
+          enumerable: true
+        });
+      } catch(e) {}
+
+      // Fix outerWidth/outerHeight
       try {
         Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1366 });
         Object.defineProperty(window, 'outerHeight', { get: () => (window.innerHeight || 768) + 88 });
       } catch(e) {}
 
-      // Block debugger statements injected by WE
-      // Only target eval'd strings, not page's own code functions
+      // Block debugger statements
       const _OrigFunction = window.Function;
       window.Function = function(...args) {
         const body = args[args.length - 1] || '';
         if (typeof body === 'string' && /^\s*debugger\s*;?\s*$/.test(body)) {
-          args[args.length - 1] = ''; // only block pure debugger statements
+          args[args.length - 1] = '';
         }
         return _OrigFunction(...args);
       };
       Object.setPrototypeOf(window.Function, _OrigFunction);
 
-      // Stealth — hide automation fingerprints
+      // Hide automation fingerprints
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
       Object.defineProperty(navigator, 'languages', { get: () => ['ar-EG', 'ar', 'en-US', 'en'] });
       Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
       Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
       Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-      // Chrome runtime — must match real Chrome object shape
       window.navigator.chrome = {
         runtime: {},
         loadTimes: function() {},
         csi: function() {},
         app: {}
       };
-      // Spoof permissions
       const originalQuery = window.navigator.permissions.query;
       window.navigator.permissions.query = (parameters) =>
         parameters.name === 'notifications'
@@ -226,7 +226,7 @@ async function harvestQuota() {
     });
 
     // ══════════════════════════════════════
-    // STEP 0: TRY SAVED SESSION COOKIES
+    // STEP 0: TRY SAVED SESSION COOKIES (NOT COUNTED IN 3 ATTEMPTS)
     // ══════════════════════════════════════
     console.log('STEP 0: SESSION CHECK');
     let sessionValid = false;
@@ -237,18 +237,39 @@ async function harvestQuota() {
         await page.setCookie(...savedCookies);
         await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
         await sleep(3000);
+        
+        // CHECK 1: URL validation
         const url = page.url();
         const isLoggedIn = !url.includes('login') && url.includes('account');
-        if (isLoggedIn) {
-          sessionValid = true;
-          console.log('  ✓ Session still valid! Skipping login entirely.\n');
-        } else {
-          console.log('  ✗ Session expired, clearing and doing fresh login');
+        
+        if (!isLoggedIn) {
+          console.log('  ✗ Session expired (redirected to login), clearing cookies');
           await clearCookies();
+          sessionValid = false;
+        } else {
+          // CHECK 2: Page actually rendered with data (not empty/error page)
+          const pageStatus = await page.evaluate(() => {
+            const bodyLen = document.body.innerHTML.length;
+            const inputs = document.querySelectorAll('input').length;
+            const hasContent = bodyLen > 50000; // Real page is >50KB, error/blank is ~12KB
+            return { bodyLen, inputs, hasContent };
+          });
+          
+          console.log(`  [SESSION] Page loaded: ${pageStatus.bodyLen} bytes, ${pageStatus.inputs} inputs`);
+          
+          if (!pageStatus.hasContent) {
+            console.log('  ✗ Session expired (page not rendered properly), clearing cookies');
+            await clearCookies();
+            sessionValid = false;
+          } else {
+            sessionValid = true;
+            console.log('  ✓ Session still valid! Skipping login entirely.\n');
+          }
         }
       } catch(e) {
         console.log('  ✗ Session check failed:', e.message);
         await clearCookies();
+        sessionValid = false;
       }
     } else {
       console.log('  No saved session, will do fresh login\n');
