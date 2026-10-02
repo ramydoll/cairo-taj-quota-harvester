@@ -147,86 +147,35 @@ async function harvestQuota() {
 
     await page.evaluateOnNewDocument((ua) => {
       // ══════════════════════════════════════════════════════════════════════════════
-      // ULTIMATE CDP BLOCKER — Prevent "Prohibit use of console" dialog from triggering
+      // MINIMAL CDP BLOCKER — Prevent "Prohibit use of console" without breaking page
       // ══════════════════════════════════════════════════════════════════════════════
       
-      // 1. Kill ALL dialog methods that WE uses to show the alert
+      // 1. Kill dialog methods
       window.alert   = () => {};
       window.confirm = () => true;
       window.prompt  = () => '';
       
-      // 2. AGGRESSIVELY remove CDP markers BEFORE WE can detect them
+      // 2. Delete CDP markers (but DON'T freeze console - that breaks React apps!)
       try {
         delete console._commandLineAPI;
-        delete window.console._commandLineAPI;
-      } catch(e) {}
-      
-      // 3. Freeze console to prevent WE from adding CDP markers or overriding methods
-      try {
-        Object.freeze(console);
-        Object.freeze(console.log);
-        Object.freeze(console.warn);
-        Object.freeze(console.error);
-      } catch(e) {}
-      
-      // 4. Remove ALL automation/DevTools global objects
-      try {
         delete window.__playwright;
         delete window.__puppeteer;
         delete window.__selenium;
         delete window.__webdriver;
         delete window.__driver;
-        delete window.emit;
-        delete window.on;
         delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
         delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
         delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
       } catch(e) {}
       
-      // 5. Hide CDP runtime methods in chrome object
-      if (window.chrome && window.chrome.runtime) {
-        try {
-          delete window.chrome.runtime.sendMessage;
-          delete window.chrome.runtime.connect;
-        } catch(e) {}
-      }
-      
-      // 6. Now wrap console with Proxy to intercept any future CDP marker checks
-      const _realConsole = window.console;
-      const _fakeConsole = new Proxy(_realConsole, {
+      // 3. Lightweight console Proxy - hide _commandLineAPI without breaking functionality
+      const _origConsole = window.console;
+      window.console = new Proxy(_origConsole, {
         get(target, prop) {
-          // CRITICAL: Hide _commandLineAPI marker that WE checks
-          if (prop === '_commandLineAPI') return undefined;
-          if (prop === 'constructor') return Object;
-          const val = target[prop];
-          if (typeof val === 'function') {
-            return new Proxy(val, {
-              apply(fn, ctx, args) { 
-                try { 
-                  return Reflect.apply(fn, ctx, args); 
-                } catch(e) {} 
-              },
-              get(fn, p) {
-                if (p === 'toString') return () => `function ${fn.name || p}() { [native code] }`;
-                return fn[p];
-              }
-            });
-          }
-          return val;
-        },
-        set() { return true; },  // Block any attempts to modify console
-        deleteProperty() { return false; }  // Block deletion attempts
+          if (prop === '_commandLineAPI') return undefined;  // Hide CDP marker
+          return target[prop];  // Allow everything else through
+        }
       });
-      
-      // 7. Lock console property on window so WE can't replace it
-      try {
-        Object.defineProperty(window, 'console', {
-          get: () => _fakeConsole,
-          set: () => {},  // Ignore all set attempts
-          configurable: false,
-          enumerable: true
-        });
-      } catch(e) {}
 
       // Fix outerWidth/outerHeight — headless = 0 which WE detects
       try {
