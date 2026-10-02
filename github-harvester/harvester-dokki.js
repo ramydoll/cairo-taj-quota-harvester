@@ -413,8 +413,7 @@ async function harvestQuota() {
         });
       }
 
-      // HELPER: Canvas preprocessing — ENHANCED 18 filter modes for WE captcha
-      // colorOnly and similar color-based filters perform best
+      // HELPER: Canvas preprocessing — 18 filter modes for WE captcha
       async function canvasProcess(imgHandle, filter) {
         return await page.evaluate((imgEl, f) => {
           if (!imgEl) return null;
@@ -438,16 +437,14 @@ async function harvestQuota() {
             const sat = max === 0 ? 0 : (max - min) / max;
             let keep = false;
             // ── GROUP A: Color-based (WE captcha uses colored text on white/gray bg) ──
-            // colorOnly is the BEST performer - keep it and add 3 more similar variants
             if      (f === 'colorOnly')   { keep = sat > 0.25 && lum < 220 && lum > 20; }
-            else if (f === 'colorTight')  { keep = sat > 0.30 && lum < 210 && lum > 25; } // NEW: tighter color
-            else if (f === 'colorMid')    { keep = sat > 0.28 && lum < 215 && lum > 22; } // NEW: middle ground
-            else if (f === 'colorSoft')   { keep = sat > 0.22 && lum < 225 && lum > 18; } // NEW: softer threshold
             else if (f === 'colorStrong') { keep = sat > 0.45 && lum < 200 && lum > 15; }
+            else if (f === 'colorWide')   { keep = sat > 0.15 && lum < 230 && lum > 10; }
             else if (f === 'red')         { keep = r > 100 && (r-g) > 30 && (r-b) > 30; }
             else if (f === 'redLoose')    { keep = r > 80  && (r-g) > 20 && (r-b) > 20; }
             else if (f === 'blue')        { keep = b > 100 && (b-r) > 30 && (b-g) > 20; }
-            // REMOVED: green, colorWide, notGray (poor performers)
+            else if (f === 'green')       { keep = g > 100 && (g-r) > 30 && (g-b) > 30; }
+            else if (f === 'notGray')     { keep = (max - min) > 40 && lum < 210; }
             // ── GROUP B: Luminance-based ──
             else if (f === 'dark')        { keep = lum < 140; }
             else if (f === 'dark2')       { keep = lum < 100; }
@@ -455,12 +452,12 @@ async function harvestQuota() {
             else if (f === 'midtone')     { keep = lum >= 60 && lum <= 180; }
             // ── GROUP C: Contrast / threshold ──
             else if (f === 'contrast')    { keep = sat > 0.3 && r > g; }
+            else if (f === 'thresh128')   { keep = lum < 128; }
             else if (f === 'thresh160')   { keep = lum < 160; }
-            // REMOVED: thresh128 (poor performer)
             // ── GROUP D: Channel-boost hybrids ──
+            else if (f === 'rBoost')      { const rb = Math.min(255, r*1.4); keep = rb > 140 && (rb-g) > 25; }
             else if (f === 'gBoost')      { const gb2 = Math.min(255, g*1.4); keep = gb2 > 120 && (gb2-r) > 20; }
             else if (f === 'satBoost')    { keep = sat > 0.35 && lum < 190 && lum > 25; }
-            // REMOVED: rBoost (poor performer - returned empty)
             d[i] = d[i+1] = d[i+2] = keep ? 0 : 255;
           }
           ctx.putImageData(data, 0, 0);
@@ -618,27 +615,19 @@ async function harvestQuota() {
       //   colorOnly = 3 votes  (always runs, always in pool)
       //   every other filter  = 1 vote each
       //   OCR noise normalization before grouping (0/O, 1/I/l, 5/S, 6/G, 8/B, 9/G, Q/G)
-      // ======================================================================
-      // MAIN CAPTCHA LOOP -- ENHANCED Ultimate Engine v6
-      //
-      // STRATEGY:
-      //   - Try OCR with best filters (colorOnly gets 3 votes, new colorTight/Mid/Soft get 2 votes each)
-      //   - If confidence >= 75% → submit
-      //   - If confidence < 75% → click refresh button, get new captcha, try again
-      //   - Max 10 refresh attempts before trying submission anyway
-      //   - Removed poor performers: green, colorWide, notGray, thresh128, rBoost
+      //   top-2 candidates submitted IN THE SAME ROUND
+      //   case cycling: round%3 -> orig / UPPER / lower
+      //   image: accept visible img even if naturalWidth===0 (lazy-load fallback)
+      //   modal retrigger: full page reload + full re-login (guaranteed fresh captcha)
       // ======================================================================
 
       const ALL_FILTERS = [
-        'colorOnly',       // Best performer - 3 votes
-        'colorTight',      // NEW - 2 votes
-        'colorMid',        // NEW - 2 votes  
-        'colorSoft',       // NEW - 2 votes
-        'colorStrong','red','redLoose',
-        'blue',
+        'colorOnly',
+        'colorStrong','colorWide','red','redLoose',
+        'blue','green','notGray',
         'dark','dark2','dark3','midtone',
-        'contrast','thresh160',
-        'gBoost','satBoost'
+        'contrast','thresh128','thresh160',
+        'rBoost','gBoost','satBoost'
       ];
 
       // Normalize OCR result for vote grouping — collapses common OCR confusion chars
@@ -759,12 +748,11 @@ async function harvestQuota() {
             }
             if (!imgHandle) { console.log('    ! No valid captcha image after 30s'); break; }
 
-            // -- Run ENHANCED filters + build weighted vote pool ------------------
-            // colorOnly = 3 votes, new colorTight/Mid/Soft = 2 votes each, others = 1 vote
+            // -- Run ALL 18 filters + build weighted vote pool ------------------
+            // colorOnly = 3 votes, all others = 1 vote
             // Normalize before grouping to collapse OCR noise variants
             votes = {};
             let filtersVoted = 0;
-            let totalVotesPossible = 0;
 
             for (const filter of ALL_FILTERS) {
               const b64 = await canvasProcess(imgHandle, filter);
@@ -777,16 +765,7 @@ async function harvestQuota() {
               if (!raw || raw.length < 5) continue;
               filtersVoted++;
               const normed = normalizeOCR(raw);
-              
-              // ENHANCED VOTING WEIGHTS
-              let weight = 1;
-              if (filter === 'colorOnly') weight = 3;        // Best performer
-              else if (filter === 'colorTight') weight = 2;  // NEW high-confidence variant
-              else if (filter === 'colorMid') weight = 2;    // NEW balanced variant
-              else if (filter === 'colorSoft') weight = 2;   // NEW softer variant
-              
-              totalVotesPossible += weight;
-              
+              const weight = filter === 'colorOnly' ? 3 : 1;
               if (!votes[normed]) votes[normed] = { weight: 0, best: raw };
               votes[normed].weight += weight;
               // colorOnly's reading takes precedence as the "best" original for submission
@@ -797,16 +776,16 @@ async function harvestQuota() {
 
             const ranked = Object.entries(votes).sort(function(a, b) { return b[1].weight - a[1].weight; });
             const maxWeight = ranked[0][1].weight;
-            const confidence = (maxWeight / totalVotesPossible) * 100;
+            const totalPossible = filtersVoted; // rough estimate (colorOnly=3, others=1)
+            const confidence = (maxWeight / totalPossible) * 100;
             console.log('    [VOTE] Results:', ranked.map(function(e) { return e[0]+'(w='+e[1].weight+')'; }).join(', '));
-            console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / possible=' + totalVotesPossible + ')');
+            console.log('    [CONFIDENCE] ' + confidence.toFixed(0) + '% (top=' + maxWeight + ' / voted=' + filtersVoted + ')');
 
-            // SMART REFRESH STRATEGY: 75% confidence threshold
-            if (confidence >= 75 || ocrAttempt >= 10) {
-              console.log('    [OCR] Confidence >= 75% or max refreshes (10) reached — proceeding to submit');
+            if (confidence >= 50 || ocrAttempt >= 3) {
+              console.log('    [OCR] Confidence acceptable or max refreshes reached — proceeding to submit');
               break;
             } else {
-              console.log('    [OCR] Confidence < 75% (' + confidence.toFixed(0) + '%), will refresh captcha image and try again');
+              console.log('    [OCR] Confidence < 50%, will refresh captcha image');
               votes = null; // reset for next attempt
             }
           }
