@@ -1,4 +1,4 @@
-﻿name: Cloud Quota Harvester - Line 104
+name: Cloud Quota Harvester - Line 104
 
 on:
   # GitHub Actions cron DISABLED - using external webhook only
@@ -27,8 +27,6 @@ jobs:
       - name: Setup Chrome
         uses: browser-actions/setup-chrome@v1
         with:
-          # CRITICAL: Always use 'stable' to match production fingerprint
-          # Using old versions (e.g. 119) triggers WE's anti-bot detection
           chrome-version: stable
       - name: Setup Node.js
         uses: actions/setup-node@v4
