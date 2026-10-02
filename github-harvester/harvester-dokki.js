@@ -143,29 +143,6 @@ async function harvestQuota() {
       window.confirm = () => true;
       window.prompt  = () => '';
 
-      // Kill setInterval/setTimeout that WE uses to keep re-triggering the dialog
-      const _origSetInterval = window.setInterval;
-      const _origSetTimeout  = window.setTimeout;
-      window.setInterval = function(fn, delay, ...args) {
-        try {
-          const fnStr = fn ? fn.toString() : '';
-          // Block any interval that mentions console, alert, debugger, or devtools
-          if (/console|alert|debugger|devtools|firebug|__secret/i.test(fnStr)) {
-            return 0; // silently drop it
-          }
-        } catch(e) {}
-        return _origSetInterval(fn, delay, ...args);
-      };
-      window.setTimeout = function(fn, delay, ...args) {
-        try {
-          const fnStr = fn ? fn.toString() : '';
-          if (/console|alert|debugger|devtools|firebug|__secret/i.test(fnStr)) {
-            return 0;
-          }
-        } catch(e) {}
-        return _origSetTimeout(fn, delay, ...args);
-      };
-
       // Lock console so WE can't override or detect it
       // Key: hide _commandLineAPI which is CDP's marker that triggers WE's detection
       const _fakeConsole = new Proxy(console, {
