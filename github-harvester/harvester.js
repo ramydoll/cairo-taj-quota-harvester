@@ -1,4 +1,4 @@
-﻿const puppeteer = require('puppeteer-extra');
+const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fetch = require('node-fetch');
 
@@ -126,98 +126,33 @@ async function harvestQuota() {
         '--disable-extensions',
         '--disable-infobars',
         '--disable-notifications',
-        '--ignore-certificate-errors',
-        // ── CDP BLOCKER: Stealth flags (disable-dev-tools removed - broke page rendering) ──
-        '--disable-remote-fonts',
-        '--disable-default-apps',
-        '--no-first-run',
-        '--disable-hang-monitor'
+        '--ignore-certificate-errors'
       ],
       ignoreDefaultArgs: ['--enable-automation']
     });
 
     page = await browser.newPage();
 
-    // Get real browser UA dynamically — avoids version mismatch detection
-    const realUA = await browser.userAgent();
-    const stealthUA = realUA
-      .replace('HeadlessChrome', 'Chrome')  // remove headless marker if any
-      .replace(/Headless/g, '');            // belt and braces
-    console.log('  [STEALTH] Real browser UA:', stealthUA.slice(0, 80) + '...');
-
-    await page.evaluateOnNewDocument((ua) => {
-      // ── Stealth injection: Hide CDP markers and automation detection ──
-      window.alert   = () => {};
+    await page.evaluateOnNewDocument(() => {
+      // Kill alert/confirm/prompt before site JS runs - prevents "Prohibit use of console" dialog
+      window.alert = () => {};
       window.confirm = () => true;
-      window.prompt  = () => '';
-
-      // Hide CDP marker via lightweight Proxy
-      const _realConsole = console;
-      const _fakeConsole = new Proxy(_realConsole, {
-        get(target, prop) {
-          if (prop === '_commandLineAPI') return undefined; // CDP marker
-          if (prop === 'constructor') return Object;
-          const val = target[prop];
-          if (typeof val === 'function') {
-            return new Proxy(val, {
-              apply(fn, ctx, args) { try { return Reflect.apply(fn, ctx, args); } catch(e) {} },
-              get(fn, p) {
-                if (p === 'toString') return () => `function ${fn.name || p}() { [native code] }`;
-                return fn[p];
-              }
-            });
-          }
-          return val;
-        },
-        set() { return true; }
+      window.prompt = () => '';
+      
+      // Protect console from being overridden by site
+      Object.defineProperty(window, 'console', {
+        writable: false,
+        configurable: false
       });
-      try {
-        Object.defineProperty(window, 'console', {
-          get: () => _fakeConsole,
-          set: () => {},
-          configurable: false,
-          enumerable: true
-        });
-      } catch(e) {}
-
-      // Fix outerWidth/outerHeight
-      try {
-        Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1366 });
-        Object.defineProperty(window, 'outerHeight', { get: () => (window.innerHeight || 768) + 88 });
-      } catch(e) {}
-
-      // Block debugger statements
-      const _OrigFunction = window.Function;
-      window.Function = function(...args) {
-        const body = args[args.length - 1] || '';
-        if (typeof body === 'string' && /^\s*debugger\s*;?\s*$/.test(body)) {
-          args[args.length - 1] = '';
-        }
-        return _OrigFunction(...args);
-      };
-      Object.setPrototypeOf(window.Function, _OrigFunction);
-
-      // Hide automation fingerprints
+      
+      // Existing stealth
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      window.navigator.chrome = { runtime: {} };
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['ar-EG', 'ar', 'en-US', 'en'] });
-      Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
-      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-      Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-      window.navigator.chrome = {
-        runtime: {},
-        loadTimes: function() {},
-        csi: function() {},
-        app: {}
-      };
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) =>
-        parameters.name === 'notifications'
-          ? Promise.resolve({ state: Notification.permission })
-          : originalQuery(parameters);
-    }, stealthUA);
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    });
 
-    await page.setUserAgent(stealthUA);
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1366, height: 768 });
 
     page.on('dialog', async dialog => {
@@ -226,7 +161,7 @@ async function harvestQuota() {
     });
 
     // ══════════════════════════════════════
-    // STEP 0: TRY SAVED SESSION COOKIES (NOT COUNTED IN 3 ATTEMPTS)
+    // STEP 0: TRY SAVED SESSION COOKIES
     // ══════════════════════════════════════
     console.log('STEP 0: SESSION CHECK');
     let sessionValid = false;
@@ -237,39 +172,18 @@ async function harvestQuota() {
         await page.setCookie(...savedCookies);
         await page.goto('https://my.te.eg/echannel/#/accountoverview', { waitUntil: 'networkidle2', timeout: 20000 });
         await sleep(3000);
-        
-        // CHECK 1: URL validation
         const url = page.url();
         const isLoggedIn = !url.includes('login') && url.includes('account');
-        
-        if (!isLoggedIn) {
-          console.log('  ✗ Session expired (redirected to login), clearing cookies');
-          await clearCookies();
-          sessionValid = false;
+        if (isLoggedIn) {
+          sessionValid = true;
+          console.log('  ✓ Session still valid! Skipping login entirely.\n');
         } else {
-          // CHECK 2: Page actually rendered with data (not empty/error page)
-          const pageStatus = await page.evaluate(() => {
-            const bodyLen = document.body.innerHTML.length;
-            const inputs = document.querySelectorAll('input').length;
-            const hasContent = bodyLen > 50000; // Real page is >50KB, error/blank is ~12KB
-            return { bodyLen, inputs, hasContent };
-          });
-          
-          console.log(`  [SESSION] Page loaded: ${pageStatus.bodyLen} bytes, ${pageStatus.inputs} inputs`);
-          
-          if (!pageStatus.hasContent) {
-            console.log('  ✗ Session expired (page not rendered properly), clearing cookies');
-            await clearCookies();
-            sessionValid = false;
-          } else {
-            sessionValid = true;
-            console.log('  ✓ Session still valid! Skipping login entirely.\n');
-          }
+          console.log('  ✗ Session expired, clearing and doing fresh login');
+          await clearCookies();
         }
       } catch(e) {
         console.log('  ✗ Session check failed:', e.message);
         await clearCookies();
-        sessionValid = false;
       }
     } else {
       console.log('  No saved session, will do fresh login\n');
@@ -1845,9 +1759,7 @@ async function harvestQuota() {
           Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
           Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
         });
-        const realUA2 = await browser.userAgent();
-        const stealthUA2 = realUA2.replace('HeadlessChrome', 'Chrome').replace(/Headless/g, '');
-        await page.setUserAgent(stealthUA2);
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await page.setViewport({ width: 1366, height: 768 });
         page.on('dialog', async dialog => { await dialog.accept(); });
 
@@ -2016,11 +1928,6 @@ async function harvestQuota() {
 }
 
 async function main() {
-  // RANDOM DELAY DISABLED FOR TESTING - re-enable when ready
-  // const startDelay = randomDelay(60000, 14 * 60 * 1000);
-  // console.log(`⏳ Random startup delay: ${Math.floor(startDelay/60000)}m ${Math.floor((startDelay%60000)/1000)}s (anti-pattern protection)`);
-  // await sleep(startDelay);
-
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       console.log(`\n${'═'.repeat(50)}\nATTEMPT ${attempt}/${MAX_RETRIES}\n${'═'.repeat(50)}\n`);
