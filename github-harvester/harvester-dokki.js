@@ -105,121 +105,24 @@ async function harvestQuota() {
       '/usr/bin/chromium' ||
       '/usr/bin/google-chrome-stable';
 
+    // SIMPLE BROWSER LAUNCH - Like a real Ubuntu user
     browser = await puppeteer.launch({
       headless: false,
       executablePath: chromiumPath,
-      protocolTimeout: 60000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
         '--window-size=1366,768',
-        '--display=:99',
-        '--disable-gpu',
-        '--disable-software-rasterizer',
-        '--disable-extensions',
-        '--disable-infobars',
-        '--disable-notifications',
-        '--ignore-certificate-errors',
-        // ── CDP BLOCKER: Stealth flags (disable-dev-tools removed - broke page rendering) ──
-        '--disable-remote-fonts',
-        '--disable-default-apps',
-        '--no-first-run',
-        '--disable-hang-monitor'
-      ],
-      ignoreDefaultArgs: ['--enable-automation']
+        '--display=:99'
+      ]
     });
 
     page = await browser.newPage();
-
-    // Get real browser UA dynamically — avoids version mismatch detection
-    const realUA = await browser.userAgent();
-    const stealthUA = realUA
-      .replace('HeadlessChrome', 'Chrome')  // remove headless marker if any
-      .replace(/Headless/g, '');            // belt and braces
-    console.log('  [STEALTH] Real browser UA:', stealthUA.slice(0, 80) + '...');
-
-    await page.evaluateOnNewDocument((ua) => {
-      // ── Stealth injection: Hide CDP markers and automation detection ──
-      window.alert   = () => {};
-      window.confirm = () => true;
-      window.prompt  = () => '';
-
-      // Hide CDP marker via lightweight Proxy
-      const _realConsole = console;
-      const _fakeConsole = new Proxy(_realConsole, {
-        get(target, prop) {
-          if (prop === '_commandLineAPI') return undefined; // CDP marker
-          if (prop === 'constructor') return Object;
-          const val = target[prop];
-          if (typeof val === 'function') {
-            return new Proxy(val, {
-              apply(fn, ctx, args) { try { return Reflect.apply(fn, ctx, args); } catch(e) {} },
-              get(fn, p) {
-                if (p === 'toString') return () => `function ${fn.name || p}() { [native code] }`;
-                return fn[p];
-              }
-            });
-          }
-          return val;
-        },
-        set() { return true; }
-      });
-      try {
-        Object.defineProperty(window, 'console', {
-          get: () => _fakeConsole,
-          set: () => {},
-          configurable: false,
-          enumerable: true
-        });
-      } catch(e) {}
-
-      // Fix outerWidth/outerHeight
-      try {
-        Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1366 });
-        Object.defineProperty(window, 'outerHeight', { get: () => (window.innerHeight || 768) + 88 });
-      } catch(e) {}
-
-      // Block debugger statements
-      const _OrigFunction = window.Function;
-      window.Function = function(...args) {
-        const body = args[args.length - 1] || '';
-        if (/debugger|console\.clear|devtools/i.test(body)) {
-          args[args.length - 1] = '';
-        }
-        return _OrigFunction(...args);
-      };
-      Object.setPrototypeOf(window.Function, _OrigFunction);
-
-      // Hide automation fingerprints
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['ar-EG', 'ar', 'en-US', 'en'] });
-      Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
-      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-      Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-      window.navigator.chrome = {
-        runtime: {},
-        loadTimes: function() {},
-        csi: function() {},
-        app: {}
-      };
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) =>
-        parameters.name === 'notifications'
-          ? Promise.resolve({ state: Notification.permission })
-          : originalQuery(parameters);
-    }, stealthUA);
-
-    await page.setUserAgent(stealthUA);
+    
+    // Simple: Just set viewport and user agent
     await page.setViewport({ width: 1366, height: 768 });
-
-    page.on('dialog', async dialog => {
-      console.log('  Dialog dismissed:', dialog.message().slice(0, 80));
-      await dialog.accept();
-    });
+    console.log('  [BROWSER] Chrome launched in non-headless mode\n');
 
     // ══════════════════════════════════════
     // STEP 0: TRY SAVED SESSION COOKIES (NOT COUNTED IN 3 ATTEMPTS)
@@ -272,446 +175,142 @@ async function harvestQuota() {
     }
 
     // ══════════════════════════════════════
-    console.log('STEP 1: NAVIGATE');
+    console.log('STEP 1: NAVIGATE TO LOGIN PAGE');
     // ══════════════════════════════════════
     if (!sessionValid) {
-    await tryMethods([
-      // M1: EXACT same as working local harvester
-      async () => {
-        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 15000 });
-        console.log('    networkidle2 + wait for 2 inputs (local harvester method)');
-      },
-      // M2: domcontentloaded + wait for 2 inputs
-      async () => {
-        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 40000 });
-        await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 20000 });
-        console.log('    domcontentloaded + wait for 2 inputs');
-      },
-      // M3: load + wait for 2 inputs
-      async () => {
-        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'load', timeout: 40000 });
-        await page.waitForFunction(() => document.querySelectorAll('input').length >= 2, { timeout: 20000 });
-        console.log('    load + wait for 2 inputs');
-      },
-      // M4: no wait + long sleep + check inputs
-      async () => {
-        await page.goto('https://my.te.eg/echannel/', { timeout: 40000 });
-        await sleep(15000);
-        const count = await page.evaluate(() => document.querySelectorAll('input').length);
-        if (count < 1) throw new Error(`Only ${count} inputs found`);
-        console.log(`    no wait + 15s sleep, found ${count} inputs`);
-      },
-      // M5: domcontentloaded + very long sleep
-      async () => {
-        await page.goto('https://my.te.eg/echannel/', { waitUntil: 'domcontentloaded', timeout: 40000 });
-        await sleep(20000);
-        console.log('    domcontentloaded + 20s sleep');
+      await page.goto('https://my.te.eg/echannel/', { waitUntil: 'networkidle2', timeout: 30000 });
+      await sleep(5000); // Wait for page to fully load
+      console.log('  ✓ Page loaded\n');
+
+      // Human-like pause before starting
+      const delay1 = randomDelay(3000, 5000);
+      console.log('  [HUMAN] Pause before typing:', delay1, 'ms');
+      await sleep(delay1);
+
+      // ======================================
+      console.log('STEP 2: USERNAME');
+      // ======================================
+      // Move mouse to username field (human-like)
+      const usernameField = await page.$('#login_loginid_input_01');
+      if (!usernameField) throw new Error('Username field not found');
+      
+      const usernameBox = await usernameField.boundingBox();
+      if (usernameBox) {
+        // Move mouse to field center
+        await page.mouse.move(
+          usernameBox.x + usernameBox.width / 2,
+          usernameBox.y + usernameBox.height / 2,
+          { steps: 10 }
+        );
+        await sleep(randomDelay(200, 500));
+        await page.mouse.click(usernameBox.x + usernameBox.width / 2, usernameBox.y + usernameBox.height / 2);
+      } else {
+        await usernameField.click();
       }
-    ], 'NAVIGATE', 55000);
+      
+      await sleep(1000);
+      // Type with human-like delays between keystrokes
+      await page.type('#login_loginid_input_01', WE_USERNAME, { delay: randomDelay(80, 150) });
+      console.log('  ✓ Username entered\n');
 
-    console.log('  URL:', page.url());
+      // Human pause
+      const delay2 = randomDelay(2000, 4000);
+      console.log('  [HUMAN] Pause:', delay2, 'ms');
+      await sleep(delay2);
 
-    // Dump diagnostics BEFORE username step
-    console.log('\n  --- FORM DIAGNOSTICS ---');
-    const diag = await withTimeout(page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input'));
-      return {
-        url: window.location.href,
-        inputCount: inputs.length,
-        inputs: inputs.map((inp, i) => ({
-          i, id: inp.id, name: inp.name, type: inp.type,
-          placeholder: inp.placeholder, visible: inp.offsetParent !== null,
-          value: inp.value
-        })),
-        hasAntSelect: !!document.querySelector('.ant-select'),
-        hasAntInput: !!document.querySelector('.ant-input'),
-        bodyLen: document.body.innerHTML.length
-      };
-    }), 10000, 'diagnostics');
-    console.log('  URL:', diag.url);
-    console.log('  Inputs found:', diag.inputCount);
-    console.log('  .ant-select:', diag.hasAntSelect, ' .ant-input:', diag.hasAntInput);
-    diag.inputs.forEach(inp => console.log(`    [${inp.i}] id="${inp.id}" type="${inp.type}" placeholder="${inp.placeholder}" visible=${inp.visible}`));
-    console.log('  --- END DIAGNOSTICS ---\n');
-
-    // Human-like pause before typing
-    const delay1 = randomDelay(5000, 8000);
-    console.log('  [HUMAN] pause', delay1, 'ms');
-    await sleep(delay1);
-
-    // ======================================
-    console.log('STEP 2: SERVICE NUMBER (USERNAME)');
-    // ======================================
-    await tryMethods([
-      // M1: EXACT same as working local harvester
-      async () => {
-        await page.focus('#login_loginid_input_01');
-        await sleep(3000);
-        await page.type('#login_loginid_input_01', WE_USERNAME, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    focus + type (local harvester method)');
-      },
-      // M2: $ find + click + type
-      async () => {
-        const el = await page.$('#login_loginid_input_01');
-        if (!el) throw new Error('ID not found');
-        await el.click(); await sleep(3000);
-        await el.type(WE_USERNAME, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    $ find + click + type');
-      },
-      // M3: .ant-input class
-      async () => {
-        const els = await page.$$('.ant-input');
-        if (!els.length) throw new Error('no .ant-input');
-        await els[0].click(); await sleep(3000);
-        await els[0].type(WE_USERNAME, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    .ant-input class');
-      },
-      // M4: input[type=text]
-      async () => {
-        const els = await page.$$('input[type="text"]');
-        if (!els.length) throw new Error('no text inputs');
-        await els[0].click(); await sleep(3000);
-        await els[0].type(WE_USERNAME, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    input[type=text]');
-      },
-      // M5: DOM evaluate with React-compatible events
-      async () => {
-        const ok = await page.evaluate((u) => {
-          const inp = document.querySelector('#login_loginid_input_01') ||
-                      document.querySelector('.ant-input') ||
-                      document.querySelector('input[type="text"]') ||
-                      document.querySelector('input:not([type="password"]):not([type="hidden"])');
-          if (!inp) return false;
-          inp.focus();
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSetter.call(inp, u);
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-          inp.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }, WE_USERNAME);
-        if (!ok) throw new Error('DOM set failed');
-        await sleep(3000);
-        console.log('    DOM native setter + React events');
-      },
-      // M6: loop all inputs
-      async () => {
-        const all = await page.$$('input');
-        if (!all.length) throw new Error('no inputs at all');
-        for (let i = 0; i < all.length; i++) {
-          const info = await all[i].evaluate(el => ({
-            type: el.type, visible: el.offsetParent !== null, id: el.id
-          }));
-          console.log(`    input[${i}] id="${info.id}" type="${info.type}" visible=${info.visible}`);
-          if (info.type !== 'password' && info.type !== 'hidden' && info.visible) {
-            await all[i].click(); await sleep(3000);
-            await all[i].type(WE_USERNAME, { delay: randomDelay(100, 200) });
-            await sleep(3000);
-            console.log(`    used input[${i}]`);
-            return;
-          }
-        }
-        throw new Error('no visible non-password input');
-      },
-      // M7: keyboard Tab from body
-      async () => {
-        await page.focus('body');
-        await sleep(3000);
-        await page.keyboard.press('Tab');
-        await sleep(1000);
-        await page.keyboard.type(WE_USERNAME, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    Tab from body + type');
-      },
-      // M8: click first input regardless of type
-      async () => {
-        await page.click('input');
-        await sleep(3000);
-        await page.keyboard.type(WE_USERNAME, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    click first input + keyboard');
-      }
-    ], 'SERVICE NUMBER', 60000);
-
-    console.log('  [OK] Service number entered\n');
-
-    // Human-like pause after username
-    const delay2 = randomDelay(5000, 8000);
-    console.log('  [HUMAN] pause', delay2, 'ms');
-    await sleep(delay2);
-
-    // Wait for dropdown to appear after username triggers React re-render
-    console.log('  Waiting for dropdown to appear...');
-    await withTimeout(
-      page.waitForFunction(() => !!document.querySelector('.ant-select, .ant-select-selector, [class*="select"]'), { timeout: 15000 }),
-      16000, 'dropdown appearance'
-    ).catch(() => console.log('  [WARN] Dropdown wait timed out, proceeding anyway'));
-    await sleep(1000);
-
-    // Log dropdown state
-    const dropdownDiag = await withTimeout(page.evaluate(() => ({
-      antSelect: !!document.querySelector('.ant-select'),
-      antSelectSelector: !!document.querySelector('.ant-select-selector'),
-      anySelect: !!document.querySelector('[class*="select"]'),
-      selectText: document.querySelector('.ant-select-selector')?.innerText || null
-    })), 5000, 'dropdown diag').catch(() => null);
-    console.log('  Dropdown state:', JSON.stringify(dropdownDiag));
-
-    // ======================================
-    console.log('STEP 3: DROPDOWN');
-    // ======================================
-    await tryMethods([
-      async () => {
-        await page.waitForFunction(() => !!document.querySelector('.ant-select-selector, .ant-select'), { timeout: 10000 });
-        await sleep(500);
-        const dropdown = await page.$('.ant-select-selector, .ant-select');
-        if (!dropdown) throw new Error('dropdown not found after wait');
+      // ======================================
+      console.log('STEP 3: SELECT INTERNET FROM DROPDOWN');
+      // ======================================
+      await sleep(1000);
+      const dropdown = await page.$('.ant-select-selector');
+      if (!dropdown) throw new Error('Dropdown not found');
+      
+      const dropdownBox = await dropdown.boundingBox();
+      if (dropdownBox) {
+        await page.mouse.move(
+          dropdownBox.x + dropdownBox.width / 2,
+          dropdownBox.y + dropdownBox.height / 2,
+          { steps: 10 }
+        );
+        await sleep(randomDelay(200, 500));
+        await page.mouse.click(dropdownBox.x + dropdownBox.width / 2, dropdownBox.y + dropdownBox.height / 2);
+      } else {
         await dropdown.click();
-        await sleep(1500);
-        const clicked = await page.evaluate(() => {
-          const items = Array.from(document.querySelectorAll('.ant-select-item-option, .ant-select-item, li'));
-          const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
-          if (internet) { internet.click(); return internet.textContent.trim(); }
-          return null;
-        });
-        if (!clicked) throw new Error('Internet option not found');
-        console.log('    waitForFunction + click, selected:', clicked);
-        await sleep(500);
-      },
-      async () => {
-        await page.waitForSelector('.ant-select-selector', { timeout: 10000 });
-        await sleep(500);
-        await page.click('.ant-select-selector');
-        await sleep(1500);
-        await page.evaluate(() => {
-          for (let el of document.querySelectorAll('.ant-select-item-option, li, div')) {
-            if (el.textContent?.toLowerCase().includes('internet')) { el.click(); return; }
-          }
-        });
-        console.log('    waitForSelector + click');
-        await sleep(500);
-      },
-      async () => {
-        await page.waitForSelector('.ant-select', { timeout: 10000 });
-        await page.click('.ant-select');
-        await sleep(1500);
-        await page.keyboard.press('ArrowDown');
-        await sleep(300);
-        await page.keyboard.press('Enter');
-        console.log('    click + arrow + enter');
-      },
-      async () => {
-        await sleep(2000);
-        await page.evaluate(() => { document.querySelector('.ant-select-selector')?.click(); });
-        await sleep(2000);
-        await page.evaluate(() => {
-          for (let el of document.querySelectorAll('li, div, span')) {
-            if (el.textContent?.toLowerCase().includes('internet')) { el.click(); return; }
-          }
-        });
-        console.log('    evaluate click + broad search');
-      },
-      async () => {
-        await sleep(2000);
-        const els = await page.$$('[class*="select"]');
-        if (els.length) { await els[0].click(); await sleep(2000); }
-        await page.keyboard.type('Internet');
-        await sleep(500);
-        await page.keyboard.press('Enter');
-        console.log('    generic selector + type');
       }
-    ], 'DROPDOWN', 20000);
+      
+      await sleep(1500);
+      
+      // Click Internet option
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('.ant-select-item-option, li'));
+        const internet = items.find(i => i.textContent.toLowerCase().includes('internet'));
+        if (internet) internet.click();
+      });
+      console.log('  ✓ Internet selected\n');
 
-    console.log('  [OK] Dropdown done\n');
+      // Human pause
+      const delay3 = randomDelay(2000, 4000);
+      console.log('  [HUMAN] Pause:', delay3, 'ms');
+      await sleep(delay3);
 
-    // Human-like pause before password
-    const delay3 = randomDelay(5000, 8000);
-    console.log('  [HUMAN] pause', delay3, 'ms');
-    await sleep(delay3);
-
-    // ======================================
-    console.log('STEP 4: PASSWORD');
-    // ======================================
-    await sleep(500);
-    await tryMethods([
-      async () => {
-        await page.focus('#login_password_input_01');
-        await sleep(3000);
-        await page.type('#login_password_input_01', WE_PASSWORD, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    focus + type (local harvester method)');
-      },
-      async () => {
-        const el = await page.$('#login_password_input_01');
-        if (!el) throw new Error('ID not found');
-        await el.click(); await sleep(3000);
-        await el.type(WE_PASSWORD, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    $ find + click + type');
-      },
-      async () => {
-        const els = await page.$$('input[type="password"]');
-        if (!els.length) throw new Error('no password inputs');
-        await els[0].click(); await sleep(3000);
-        await els[0].type(WE_PASSWORD, { delay: randomDelay(100, 200) });
-        await sleep(3000);
-        console.log('    input[type=password]');
-      },
-      async () => {
-        const ok = await page.evaluate((p) => {
-          const inp = document.querySelector('#login_password_input_01') ||
-                      document.querySelector('input[type="password"]');
-          if (!inp) return false;
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSetter.call(inp, p);
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-          inp.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }, WE_PASSWORD);
-        if (!ok) throw new Error('DOM set failed');
-        console.log('    DOM native setter');
-      },
-      async () => {
-        const all = await page.$$('input');
-        for (let i = 0; i < all.length; i++) {
-          const type = await all[i].evaluate(el => el.type);
-          if (type === 'password') {
-            await all[i].click(); await sleep(3000);
-            await all[i].type(WE_PASSWORD, { delay: randomDelay(100, 200) });
-            await sleep(3000);
-            console.log(`    loop found password at input[${i}]`);
-            return;
-          }
-        }
-        throw new Error('no password input in loop');
+      // ======================================
+      console.log('STEP 4: PASSWORD');
+      // ======================================
+      const passwordField = await page.$('#login_password_input_01');
+      if (!passwordField) throw new Error('Password field not found');
+      
+      const passwordBox = await passwordField.boundingBox();
+      if (passwordBox) {
+        await page.mouse.move(
+          passwordBox.x + passwordBox.width / 2,
+          passwordBox.y + passwordBox.height / 2,
+          { steps: 10 }
+        );
+        await sleep(randomDelay(200, 500));
+        await page.mouse.click(passwordBox.x + passwordBox.width / 2, passwordBox.y + passwordBox.height / 2);
+      } else {
+        await passwordField.click();
       }
-    ], 'PASSWORD', 60000);
+      
+      await sleep(1000);
+      await page.type('#login_password_input_01', WE_PASSWORD, { delay: randomDelay(80, 150) });
+      console.log('  ✓ Password entered\n');
 
-    console.log('  [OK] Password done\n');
+      // Human pause
+      const delay4 = randomDelay(2000, 4000);
+      console.log('  [HUMAN] Pause before submit:', delay4, 'ms');
+      await sleep(delay4);
 
-    // Human-like pause before submit
-    const delay4 = randomDelay(5000, 8000);
-    console.log('  [HUMAN] pause', delay4, 'ms');
-    await sleep(delay4);
-
-    // ======================================
-    console.log('STEP 5: SUBMIT');
-    // ======================================
-    
-    // ULTIMATE SUBMISSION: Trigger all validation, wait for anti-bot, then click button
-    await sleep(1000);
-    const submitSuccess = await page.evaluate(() => {
-      // Step 1: Trigger validation on all inputs
-      const inputs = document.querySelectorAll('input');
-      inputs.forEach(inp => {
-        inp.dispatchEvent(new Event('blur', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      // ======================================
+      console.log('STEP 5: SUBMIT');
+      // ======================================
+      const loginButton = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => b.textContent?.toLowerCase().includes('login') && !b.textContent?.toLowerCase().includes('register'));
       });
       
-      // Step 2: Find the Login button (ULTIMATE STRATEGY - PRIORITY ORDER)
-      const btns = Array.from(document.querySelectorAll('button'));
-      console.log(`  [BUTTON-DEBUG] Total buttons found: ${btns.length}`);
+      if (!loginButton) throw new Error('Login button not found');
       
-      // Log all buttons for debugging
-      btns.forEach((b, i) => {
-        console.log(`  [BUTTON-DEBUG] Button ${i}: text="${b.textContent?.trim()}" class="${b.className}" id="${b.id}"`);
+      const buttonSelector = await page.evaluateHandle(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        return btns.find(b => b.textContent?.toLowerCase().includes('login') && !b.textContent?.toLowerCase().includes('register'));
       });
       
-      let loginBtn = null;
-      
-      // PRIORITY 1: Button with specific ID (most reliable)
-      if (!loginBtn) {
-        loginBtn = document.getElementById('login-withecare') || 
-                   document.querySelector('[id*="login"][id*="with"]');
-        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 1: Found by ID');
+      const buttonBox = await buttonSelector.asElement().boundingBox();
+      if (buttonBox) {
+        await page.mouse.move(
+          buttonBox.x + buttonBox.width / 2,
+          buttonBox.y + buttonBox.height / 2,
+          { steps: 10 }
+        );
+        await sleep(randomDelay(200, 500));
+        await page.mouse.click(buttonBox.x + buttonBox.width / 2, buttonBox.y + buttonBox.height / 2);
+      } else {
+        await buttonSelector.asElement().click();
       }
       
-      // PRIORITY 2: Button text contains "login" (case-insensitive, exclude "register")
-      if (!loginBtn) {
-        loginBtn = btns.find(b => {
-          const text = b.textContent?.toLowerCase() || '';
-          return text.includes('login') && !text.includes('register');
-        });
-        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 2: Found by text "login"');
-      }
-      
-      // PRIORITY 3: Button with primary class BUT not register
-      if (!loginBtn) {
-        loginBtn = btns.find(b => {
-          const hasClass = b.className && (b.className.includes('primary') || b.className.includes('submit'));
-          const text = b.textContent?.toLowerCase() || '';
-          const notRegister = !text.includes('register');
-          return hasClass && notRegister;
-        });
-        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 3: Found by primary class (not register)');
-      }
-      
-      // PRIORITY 4: Button type="submit" anywhere on page (not just in form)
-      if (!loginBtn) {
-        loginBtn = document.querySelector('button[type="submit"]');
-        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 4: Found by type="submit"');
-      }
-      
-      // PRIORITY 5: .ant-btn-primary anywhere on page (not just in form)
-      if (!loginBtn) {
-        loginBtn = document.querySelector('button.ant-btn-primary');
-        if (loginBtn) console.log('  [BUTTON-MATCH] Strategy 5: Found by .ant-btn-primary');
-      }
-      
-      // PRIORITY 6: Last button that's NOT register
-      if (!loginBtn && btns.length > 0) {
-        // Filter out register buttons, then take last one
-        const nonRegisterBtns = btns.filter(b => {
-          const text = b.textContent?.toLowerCase() || '';
-          return !text.includes('register');
-        });
-        if (nonRegisterBtns.length > 0) {
-          loginBtn = nonRegisterBtns[nonRegisterBtns.length - 1];
-          console.log('  [BUTTON-MATCH] Strategy 6: Last non-register button');
-        }
-      }
-      
-      // If still not found, return detailed error
-      if (!loginBtn) {
-        const errorMsg = `No login button found. Buttons on page: ${btns.length}`;
-        console.log(`  [BUTTON-ERROR] ${errorMsg}`);
-        btns.forEach((b, i) => {
-          console.log(`    Button ${i}: "${b.textContent?.trim()}" (class: ${b.className}, id: ${b.id})`);
-        });
-        return { success: false, reason: errorMsg };
-      }
-      
-      // Log final selection
-      console.log(`  [BUTTON-FINAL] Selected: text="${loginBtn.textContent?.trim()}" id="${loginBtn.id}" class="${loginBtn.className}"`);
-      
-      // Step 3: Ensure button is enabled
-      if (loginBtn.disabled) {
-        loginBtn.disabled = false;
-        loginBtn.classList.remove('ant-btn-disabled');
-      }
-      
-      // Step 4: Click the button (multiple methods)
-      try {
-        loginBtn.click(); // Native click
-        loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); // Synthetic click
-        return { success: true, buttonText: loginBtn.textContent.trim() };
-      } catch(e) {
-        return { success: false, reason: e.message };
-      }
-    });
-    
-    console.log('    [SUBMIT] Result:', JSON.stringify(submitSuccess));
-    
-    if (!submitSuccess.success) {
-      console.log('    [SUBMIT] Button click failed, trying Enter key fallback...');
-      await page.keyboard.press('Enter');
-    }
-    
-    await sleep(6000);
+      console.log('  ✓ Login button clicked');
+      await sleep(6000);
 
     // ======================================
     // POST-SUBMIT: Race - URL change vs captcha modal vs block
