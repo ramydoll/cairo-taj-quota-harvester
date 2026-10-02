@@ -206,12 +206,12 @@ async function harvestQuota() {
       } catch(e) {}
 
       // Block debugger statements injected by WE
-      // Override Function constructor to neutralize debugger traps
+      // Only target eval'd strings, not page's own code functions
       const _OrigFunction = window.Function;
       window.Function = function(...args) {
         const body = args[args.length - 1] || '';
-        if (/debugger|console\.clear|devtools/i.test(body)) {
-          args[args.length - 1] = ''; // empty the function body
+        if (typeof body === 'string' && /^\s*debugger\s*;?\s*$/.test(body)) {
+          args[args.length - 1] = ''; // only block pure debugger statements
         }
         return _OrigFunction(...args);
       };
@@ -221,7 +221,7 @@ async function harvestQuota() {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
       Object.defineProperty(navigator, 'languages', { get: () => ['ar-EG', 'ar', 'en-US', 'en'] });
-      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+      Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
       Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
       Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
       // Chrome runtime — must match real Chrome object shape
