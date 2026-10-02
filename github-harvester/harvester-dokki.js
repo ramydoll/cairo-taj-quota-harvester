@@ -52,6 +52,15 @@ async function tryMethods(methods, stepName, timeout) {
 
 async function harvestQuota() {
   console.log('🚀 STARTING...\n');
+
+  // Random startup delay (3-18 minutes) to avoid detection patterns
+  const startupDelayMinutes = randomDelay(3, 18);
+  const startupDelayMs = startupDelayMinutes * 60 * 1000;
+  console.log(`⏳ Random startup delay: ${startupDelayMinutes} minutes (${Math.floor(startupDelayMs/1000)}s)`);
+  console.log(`   This helps avoid detection by randomizing execution times\n`);
+  await sleep(startupDelayMs);
+  console.log('✓ Startup delay complete, proceeding...\n');
+
   let browser, page;
 
   // ── Session Cookie Helpers ─────────────────────────────────────────────────
